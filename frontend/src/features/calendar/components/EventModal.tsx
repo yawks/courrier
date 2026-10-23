@@ -11,6 +11,7 @@ import { CalendarConfig, CalendarEvent, Attendee, AttendeeStatus } from '../../.
 import { openExternalUrl } from '../../../shared/services/fileService';
 import i18n from '../../../i18n';
 import { useTags } from '../store/TagStore';
+import { decodeHtmlEntities } from '../../mail/utils';
 
 function openExternal(url: string) {
   openExternalUrl(url);
@@ -230,7 +231,7 @@ function AttendeeRow({ attendee }: { readonly attendee: Attendee }) {
     <div className="attendee-row" title={attendee.email ? `${attendee.email} — ${statusLabel}` : statusLabel}>
       <AttendeeStatusIcon status={attendee.status} />
       <span className="attendee-name">
-        {attendee.name}
+        {decodeHtmlEntities(attendee.name)}
         {attendee.email && (
           <button className="attendee-copy-btn" onClick={handleCopy} title={attendee.email}>
             {copied ? <Check size={12} /> : <Copy size={12} />}
