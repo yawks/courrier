@@ -876,6 +876,11 @@
 }
 
 /* TUI renders all-day items as weekday events inside the all-day panel. */
+.toastui-calendar-allday-panel .toastui-calendar-weekday-exceed-in-week {
+  /* Event titles also have z-index: 1 and otherwise intercept this control. */
+  z-index: 2;
+}
+
 .toastui-calendar-allday-panel .toastui-calendar-weekday-event {
   border-radius: 3px !important;
   overflow: hidden;
