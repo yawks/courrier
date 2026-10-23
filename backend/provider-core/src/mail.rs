@@ -9,7 +9,6 @@ use crate::mail_provider::{
     MailMessage, MailProvider, MailRecipient, MailSearchQuery, MailThread, SaveDraftParams, SendMailParams,
 };
 
-const EWS_ENDPOINT: &str = "https://outlook.office365.com/EWS/Exchange.asmx";
 const OUTLOOK_SERVICE_ENDPOINT: &str =
     "https://outlook.office365.com/outlookservice/servicechannel.hxs";
 
@@ -61,57 +60,13 @@ fn search_folder_xml(folder: &str) -> String {
 
 // ── Private network helpers ───────────────────────────────────────────────────
 
-/// Like `ews::send_ews_request` but wraps the body in an envelope that declares
-/// `RequestedServerVersion Exchange2013_SP1`.  FindConversation / GetConversationItems
-/// were introduced in Exchange 2013 and are rejected when the server falls back to
-/// the default (Exchange 2007) schema.
+/// Mail and calendar use the same Exchange 2013 envelope and account budget.
 async fn send(access_token: &str, soap_body: &str) -> Result<String, String> {
-    let envelope = format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-  <soap:Header>
-    <t:RequestServerVersion Version="Exchange2013_SP1"/>
-  </soap:Header>
-  <soap:Body>
-    {}
-  </soap:Body>
-</soap:Envelope>"#,
-        soap_body
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(EWS_ENDPOINT)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "text/xml; charset=utf-8")
-        .body(envelope)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-
-    if status.as_u16() == 401 {
-        return Err("ews_unauthorized".to_string());
+    match crate::ews::send_ews_request(access_token, soap_body, None).await {
+        Err(error) if soap_body.contains("<m:GetUserPhoto>")
+            && error.starts_with("EWS HTTP ") => Err("ews_photo_unavailable".to_string()),
+        result => result,
     }
-    if !status.is_success() {
-        // A missing or non-SMTP contact photo is not a mail synchronization
-        // failure. EWS commonly reports it as an HTTP 500 SOAP fault; keep that
-        // expected fallback out of the console and out of query retries.
-        if soap_body.contains("<m:GetUserPhoto>") {
-            return Err("ews_photo_unavailable".to_string());
-        }
-        eprintln!("[EWS send] HTTP {} body:\n{}", status, &body);
-        return Err(format!(
-            "EWS HTTP {}: {}",
-            status,
-            &body[..body.len().min(2000)]
-        ));
-    }
-    Ok(body)
 }
 
 /// Extract a human-readable error from a ResponseClass="Error" response.

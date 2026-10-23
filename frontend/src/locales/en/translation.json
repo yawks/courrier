@@ -1,4 +1,5 @@
 {
+  "exchangeBusy": "Exchange is temporarily busy. Try again in {{seconds}} s.",
   "eventOptions": {
   "type": "Event type",
   "availability": "Availability",

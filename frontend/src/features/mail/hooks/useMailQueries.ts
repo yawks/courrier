@@ -1,3 +1,4 @@
+import { ewsRetryAt, temporaryServiceRetryDelay } from '../../../shared/utils/ewsError';
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { MailProvider } from '../providers/MailProvider';
 import { Folder, MailSearchQuery, MailThread, MailMessage, MailFolder, MailIdentity } from '../types';
@@ -19,7 +20,7 @@ export const MAIL_KEYS = {
 
 const EMPTY_ARRAY: any[] = [];
 const retryTemporaryMailFailure = (failureCount: number, error: unknown) => failureCount < 3 && isTemporaryMailServiceError(error);
-const temporaryMailRetryDelay = (attempt: number) => Math.min(2_000 * 2 ** attempt, 10_000);
+const temporaryMailRetryDelay = temporaryServiceRetryDelay;
 
 export function useMailFolders(accountId: string, provider: MailProvider | null) {
   const { data, isLoading, isFetching, error, refetch } = useQuery({
@@ -334,7 +335,9 @@ export function useMailConversation(
     // Query still paints the cached data first and validates it in background.
     refetchOnMount: true,
     retry: 2,
-    retryDelay: attempt => Math.min(500 * 2 ** attempt, 2_000),
+    retryDelay: (attempt, error) => ewsRetryAt(error) === undefined
+      ? Math.min(500 * 2 ** attempt, 2_000)
+      : temporaryServiceRetryDelay(attempt, error),
   });
   return useMemo(
     () => ({ data: data ?? (EMPTY_ARRAY as MailMessage[]), isLoading, isFetching, isSuccess, isError, isPaused, error, refetch }),

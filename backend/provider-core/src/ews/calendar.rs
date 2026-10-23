@@ -1044,6 +1044,7 @@ pub async fn ews_shared_calendars(access_token: String, email: String) -> Result
 // EWS can return HTTP 200 with a SOAP error; never treat it as an empty folder list.
 fn shared_folder_response(response: Result<String, String>) -> Result<String, String> {
     let xml = response.map_err(|error| {
+        if error.starts_with("ews_server_busy:") { return error; }
         if error.contains("ews_unauthorized") || error.contains("401") { "ews_shared_unauthorized" }
         else if error.contains("403") { "ews_shared_access_denied" }
         else { "ews_shared_request_failed" }.to_string()
@@ -1157,6 +1158,7 @@ mod shared_calendar_tests {
         assert!(shared_folder_response(Ok("<ResponseCode>NoError</ResponseCode>".into())).is_ok());
         assert_eq!(shared_folder_response(Ok("<html>unexpected response</html>".into())).unwrap_err(), "ews_shared_invalid_response");
         assert_eq!(shared_folder_response(Err("EWS HTTP 403: private body".into())).unwrap_err(), "ews_shared_access_denied");
+        assert_eq!(shared_folder_response(Err("ews_server_busy:123456".into())).unwrap_err(), "ews_server_busy:123456");
     }
     #[test]
     fn shared_folders_keep_their_names_and_ids() {

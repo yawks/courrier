@@ -1,3 +1,4 @@
+import { ewsRetryAt, temporaryServiceRetryDelay } from './utils/ewsError';
 import { QueryClient } from '@tanstack/react-query';
 import { get, set, del } from 'idb-keyval';
 import { persistQueryClientSave, type PersistedClient, type Persister, type PersistedQueryClientSaveOptions } from '@tanstack/react-query-persist-client';
@@ -24,6 +25,9 @@ export const queryClient = new QueryClient({
       gcTime: 1000 * 60 * 10, // 10 minutes (avoid memory bloat)
       refetchOnWindowFocus: true,
       retry: 1,
+      retryDelay: (attempt, error) => ewsRetryAt(error) === undefined
+        ? Math.min(1_000 * 2 ** attempt, 30_000)
+        : temporaryServiceRetryDelay(attempt, error),
     },
   },
 });

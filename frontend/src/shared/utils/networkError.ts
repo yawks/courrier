@@ -1,3 +1,5 @@
+import { ewsRetryAt } from './ewsError';
+
 /** Connectivity failures expected while the browser and network stack wake up. */
 export function isOfflineLikeError(error: unknown): boolean {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
@@ -24,6 +26,7 @@ export function isOfflineLikeError(error: unknown): boolean {
 
 /** Provider failures that are expected to recover without user action. */
 export function isTemporaryMailServiceError(error: unknown): boolean {
+  if (ewsRetryAt(error) !== undefined) return true;
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error ?? '');
   return [
     /ErrorMailboxStoreUnavailable/i,

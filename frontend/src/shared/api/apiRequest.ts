@@ -1,3 +1,4 @@
+import { localizeEwsError } from '../utils/ewsError';
 import { platform } from '../platform';
 
 const NATIVE_SETTINGS_KEY = 'courrier-native-settings-v1';
@@ -43,7 +44,7 @@ export async function apiJson<T>(response: Response): Promise<T> {
     const message = payload && typeof payload === 'object' && 'error' in payload
       ? String((payload as { error: unknown }).error)
       : `HTTP ${response.status}`;
-    throw new Error(message);
+    throw localizeEwsError(new Error(message));
   }
   return payload as T;
 }

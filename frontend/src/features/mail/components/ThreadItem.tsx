@@ -1,3 +1,4 @@
+import { ewsRetryAt, temporaryServiceRetryDelay } from '../../../shared/utils/ewsError';
 import { useMailContentRules } from '../../../shared/store/MailContentRulesStore';
 import { Archive, BellOff, CalendarClock, Check, Clock, Mail as MailIcon, MailOpen, Paperclip, Trash2 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -187,7 +188,9 @@ export function ThreadItem({ thread, isSelected, isChecked, snoozeUntil, isInSno
     staleTime: Infinity,
     gcTime: Infinity,
     retry: 2,
-    retryDelay: attempt => Math.min(500 * 2 ** attempt, 2_000),
+    retryDelay: (attempt, error) => ewsRetryAt(error) === undefined
+      ? Math.min(500 * 2 ** attempt, 2_000)
+      : temporaryServiceRetryDelay(attempt, error),
   });
   const snippet = thread.snippet || snippetQuery.data || '';
   const needsBodyPreview = useMemo(() => mailPreviewNeedsBody(snippet, rules), [snippet, rules]);

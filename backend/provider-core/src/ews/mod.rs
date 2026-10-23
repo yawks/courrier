@@ -178,6 +178,7 @@ pub async fn ews_refresh_access_token(refresh_token: String) -> Result<TokenResp
     })
 }
 
+mod throttle;
 pub mod recurrence;
 pub mod calendar;
 pub use calendar::*;
@@ -206,6 +207,8 @@ pub(crate) async fn send_ews_request(
     soap_body: &str,
     anchor_mailbox: Option<&str>,
 ) -> Result<String, String> {
+    let budget = throttle::budget(access_token);
+    let _permit = budget.acquire().await?;
     let client = reqwest::Client::new();
     let envelope = soap_envelope(soap_body);
 
@@ -225,7 +228,9 @@ pub(crate) async fn send_ews_request(
         .map_err(|e| e.to_string())?;
 
     let status = response.status();
+    let retry_after = throttle::retry_after(response.headers());
     let body = response.text().await.map_err(|e| e.to_string())?;
+    budget.response(status.as_u16(), &body, retry_after)?;
 
     if status.as_u16() == 401 {
         return Err("ews_unauthorized".to_string());
@@ -278,23 +283,34 @@ pub async fn ews_wait_for_change(
     if let Some(mailbox) = anchor_mailbox.as_deref() {
         request = request.header("X-AnchorMailbox", mailbox);
     }
+    let budget = throttle::budget(&access_token);
+    let permit = budget.acquire().await?;
     let response = request.body(envelope).send().await.map_err(request_error)?;
     let status = response.status();
     if status.as_u16() == 401 {
         return Err("ews_unauthorized".to_string());
     }
+    let retry_after = throttle::retry_after(response.headers());
     if !status.is_success() {
+        let body = response.text().await.map_err(request_error)?;
+        budget.response(status.as_u16(), &body, retry_after)?;
         return Err(format!("EWS HTTP {}", status));
     }
+    drop(permit);
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     while let Some(chunk) = stream.next().await {
         buffer.push_str(&String::from_utf8_lossy(&chunk.map_err(request_error)?));
+        let error_complete = buffer.split("</").skip(1).any(|tail| {
+            matches!(tail.split('>').next().and_then(|tag| tag.rsplit(':').next()),
+                Some("Fault" | "GetStreamingEventsResponseMessage"))
+        });
+        if error_complete { budget.response(status.as_u16(), &buffer, retry_after)?; }
         if contains_mail_change_event(&buffer) {
             return Ok(());
         }
-        if buffer.contains("ResponseClass=\"Error\"") {
+        if error_complete && buffer.contains("ResponseClass=\"Error\"") {
             return Err(xml_content_ns(&buffer, "m:ResponseCode")
                 .unwrap_or_else(|| "ews_stream_failed".to_string()));
         }
@@ -304,6 +320,7 @@ pub async fn ews_wait_for_change(
             buffer.drain(..buffer.len() - 4_096);
         }
     }
+    budget.response(status.as_u16(), &buffer, retry_after)?;
     Err("ews_stream_closed".to_string())
 }
 
