@@ -635,6 +635,7 @@
       "fontSize": "Size",
       "textColor": "Text color",
       "bgColor": "Background color",
+      "clearFormatting": "Clear formatting",
       "pasteImage": "Paste image from clipboard"
     },
     "search": {

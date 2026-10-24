@@ -635,6 +635,7 @@
       "fontSize": "Taille",
       "textColor": "Couleur du texte",
       "bgColor": "Couleur du fond",
+      "clearFormatting": "Effacer la mise en forme",
       "pasteImage": "Coller une image depuis le presse-papier"
     },
     "search": {

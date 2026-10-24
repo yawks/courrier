@@ -12,7 +12,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Extension, Node } from '@tiptap/core';
 import {
   Bold as BoldIcon, Highlighter, ImagePlus, Italic as ItalicIcon,
-  List, ListOrdered, Quote, Type, Underline as UnderlineIcon,
+  List, ListOrdered, Quote, RemoveFormatting, Type, Underline as UnderlineIcon,
 } from 'lucide-react';
 
 // ── Resizable image node view ──────────────────────────────────────────────────
@@ -276,7 +276,9 @@ function Btn({
     <button
       type="button"
       className={`mail-format-btn${active ? ' mail-format-btn--active' : ''}`}
-      onMouseDown={e => { e.preventDefault(); onClick(); }}
+      onMouseDown={e => e.preventDefault()}
+      onClick={onClick}
+      aria-label={title}
       title={title}
     >
       {children}
@@ -394,6 +396,12 @@ function FormattingToolbar({ editor }: { editor: Editor | null }) {
           onChange={e => editor.chain().focus().setHighlight({ color: e.target.value }).run()}
         />
       </label>
+
+      <div className="mail-format-sep" />
+
+      <Btn title={t('mail.format.clearFormatting')} onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
+        <RemoveFormatting size={15} aria-hidden="true" />
+      </Btn>
 
       <div className="mail-format-sep" />
 
