@@ -46,27 +46,31 @@ describe('EmailHtmlBody regression: forwarded Gmail/Outlook message', () => {
     expect(root.textContent).toContain('Pour le coup je ne suis pas intéressé');
   });
 
-  it('fits a fixed-width email and recalculates after images load', async () => {
+  it('fits wide signature tables without shrinking the message and recalculates after images load', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     const component = createRoot(host);
     await act(async () => component.render(<EmailHtmlBody html="<table width='1400'><tr><td>Wide email</td></tr></table>" />));
     const frame = host.querySelector('iframe')!;
     const doc = frame.contentDocument!;
-    doc.body.innerHTML = '<div class="ew">Wide email</div>';
+    doc.body.innerHTML = '<div class="ew"><p style="font-size:12pt">Message text</p><div id="Signature"><table><tr><td><table><tr><td>Wide signature</td></tr></table></td></tr></table></div></div>';
     const content = doc.querySelector<HTMLElement>('.ew')!;
-    const setProperty = vi.spyOn(content.style, 'setProperty');
-    const removeProperty = vi.spyOn(content.style, 'removeProperty');
+    const table = content.querySelector('table')!;
+    const setProperty = vi.spyOn(table.style, 'setProperty');
+    const removeProperty = vi.spyOn(table.style, 'removeProperty');
     let contentHeight = 400;
     vi.spyOn(content, 'getBoundingClientRect').mockImplementation(() => ({ height: contentHeight, top: 0 } as DOMRect));
     Object.defineProperty(doc.documentElement, 'scrollHeight', { get: () => Number.parseFloat(frame.style.height) || 0 });
     let availableWidth = 480;
     Object.defineProperty(doc.documentElement, 'clientWidth', { get: () => availableWidth });
-    Object.defineProperty(content, 'scrollWidth', { get: () => 1400 });
+    Object.defineProperty(table, 'scrollWidth', { get: () => 1400 });
 
     await act(async () => frame.dispatchEvent(new Event('load')));
     expect(setProperty).toHaveBeenLastCalledWith('zoom', String(480 / 1400), 'important');
     expect(frame.style.visibility).toBe('visible');
+    expect(content.style.getPropertyValue('zoom')).toBe('');
+    expect(content.querySelector('p')!.style.fontSize).toBe('12pt');
+    expect(table.querySelector('table')!.style.getPropertyValue('zoom')).toBe('');
 
     for (const width of [320, 1024, 1600]) {
       availableWidth = width;

@@ -201,15 +201,16 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
     }
 
     const fitToFrameWidth = () => {
-      root.style.removeProperty('zoom');
-      root.style.removeProperty('width');
-      root.style.removeProperty('max-width');
-      const availableWidth = doc.documentElement.clientWidth;
-      const contentWidth = root.scrollWidth;
-      if (availableWidth > 0 && contentWidth > availableWidth + 1) {
-        root.style.setProperty('width', `${contentWidth}px`, 'important');
-        root.style.setProperty('max-width', 'none', 'important');
-        root.style.setProperty('zoom', String(availableWidth / contentWidth), 'important');
+      // A wide Outlook signature must not shrink the surrounding message text.
+      const tables = Array.from(root.querySelectorAll<HTMLTableElement>('table'))
+        .filter(table => !table.parentElement?.closest('table'));
+      for (const table of tables) table.style.removeProperty('zoom');
+      for (const table of tables) {
+        const availableWidth = Math.min(doc.documentElement.clientWidth, table.parentElement?.clientWidth || doc.documentElement.clientWidth);
+        const contentWidth = Math.max(table.scrollWidth, table.getBoundingClientRect().width);
+        if (availableWidth > 0 && contentWidth > availableWidth + 1) {
+          table.style.setProperty('zoom', String(availableWidth / contentWidth), 'important');
+        }
       }
     };
 

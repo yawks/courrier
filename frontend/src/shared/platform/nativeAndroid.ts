@@ -9,6 +9,8 @@ export interface AndroidShare {
 }
 
 interface CourrierNativePlugin {
+  saveDownload(options: { name: string; data: string; contentType: string }): Promise<{ path: string }>;
+  openDownload(options: { path: string; contentType: string }): Promise<void>;
   requestCalendarPermission(): Promise<{ granted: boolean }>;
   publishCalendars(options: { calendars: import('./types').NativeCalendarSnapshot[] }): Promise<void>;
   acknowledgeShare(options: { id: string }): Promise<void>;
@@ -49,7 +51,7 @@ export const androidShare = {
   consume: async () => (await plugin.consumeShare()).share,
 };
 
-const plugin = registerPlugin<CourrierNativePlugin>('CourrierNative');
+export const plugin = registerPlugin<CourrierNativePlugin>('CourrierNative');
 
 export const nativeAndroidPlatform: NativePlatform = {
   requestCalendarPermission: async () => (await plugin.requestCalendarPermission()).granted,

@@ -657,6 +657,8 @@
       "today": "Today"
     },
     "attachment": {
+      "open": "Open",
+      "openError": "Unable to open this file in a system application.",
       "preview": "Preview",
       "download": "Download"
     },

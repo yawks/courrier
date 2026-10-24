@@ -8,8 +8,18 @@ const appCommitDate = process.env.VITE_APP_COMMIT_DATE || gitValue(['log', '-1',
 
 
 export default defineConfig({
-  plugins: [react()],
-  optimizeDeps: { exclude: ["@silurus/ooxml"] },
+  plugins: [react(), {
+    name: 'calendar-expanded-row-height',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.endsWith('/@toast-ui/calendar/dist/toastui-calendar.mjs')) return;
+      // Toast UI 2.1.3 omits row spacing when expanding the all-day panel.
+      const original = 'height: (maxTop + 1) * EVENT_HEIGHT';
+      if (!code.includes(original)) this.error('Recheck the Toast UI expanded row height fix after upgrading.');
+      return code.replace(original, 'height: (maxTop + 1) * (EVENT_HEIGHT + WEEK_EVENT_MARGIN_TOP)');
+    },
+  }],
+  optimizeDeps: { exclude: ["@silurus/ooxml", "@toast-ui/calendar"] },
   clearScreen: false,
   define: { 'import.meta.env.VITE_APP_COMMIT_ID': JSON.stringify(appCommitId), 'import.meta.env.VITE_APP_COMMIT_DATE': JSON.stringify(appCommitDate) },
   server: {

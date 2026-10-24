@@ -23,6 +23,29 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 @CapacitorPlugin(name="CourrierNative",permissions=[Permission(alias="notifications",strings=[Manifest.permission.POST_NOTIFICATIONS]), Permission(alias="calendar",strings=[Manifest.permission.READ_CALENDAR,Manifest.permission.WRITE_CALENDAR])])
 class CourrierNativePlugin:Plugin(){
+ @PluginMethod fun saveDownload(call:PluginCall){
+  try {
+   val name=java.io.File(call.getString("name") ?: return call.reject("Missing name")).name
+   require(name.isNotBlank() && name!="." && name!="..")
+   val directory=java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS),java.util.UUID.randomUUID().toString())
+   check(directory.mkdirs())
+   val file=java.io.File(directory,name)
+   val data=(call.getString("data") ?: return call.reject("Missing data")).replace('-','+').replace('_','/')
+   file.writeBytes(Base64.decode(data,Base64.DEFAULT))
+   call.resolve(JSObject().put("path",file.absolutePath))
+  } catch(e:Exception){call.reject("Unable to save file",e)}
+ }
+ @PluginMethod fun openDownload(call:PluginCall){
+  try {
+   val file=java.io.File(call.getString("path") ?: return call.reject("Missing path")).canonicalFile
+   val root=context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)!!.canonicalFile
+   require(file.path.startsWith(root.path+java.io.File.separator) && file.isFile)
+   val uri=androidx.core.content.FileProvider.getUriForFile(context,context.packageName+".downloads",file)
+   activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,call.getString("contentType") ?: "application/octet-stream").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+   call.resolve()
+  } catch(e:Exception){call.reject("Unable to open file",e)}
+ }
+
  private val calendarExecutor = Executors.newSingleThreadExecutor()
  @PluginMethod fun requestCalendarPermission(call: PluginCall) {
   if (getPermissionState("calendar") == PermissionState.GRANTED) {

@@ -1421,10 +1421,17 @@ export default function MailApp() {
       )}
 
       {downloadToast && createPortal(
-        <div className="mail-download-toast">
+        <div className="mail-download-toast" role="status">
           <Download size={13} />
-          <span className="mail-download-toast__name">{downloadToast.name}</span>
-          <button type="button" className="mail-download-toast__close" onClick={() => setDownloadToast(null)}>
+          <span className="mail-download-toast__name">{downloadToast.name}{downloadToast.error && <span className="mail-download-toast__error" role="alert">{downloadToast.error}</span>}</span>
+          {downloadToast.open && <button type="button" className="mail-download-toast__open" onClick={async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+            try { await downloadToast.open?.(); } catch { setDownloadToast(current => current === downloadToast ? { ...current, error: t('mail.attachment.openError') } : current); }
+            finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+          }}>{t('mail.attachment.open')}</button>}
+          <button type="button" aria-label={t('mail.close')} className="mail-download-toast__close" onClick={() => setDownloadToast(null)}>
             <X size={13} />
           </button>
         </div>,

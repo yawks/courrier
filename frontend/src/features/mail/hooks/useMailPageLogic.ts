@@ -528,7 +528,7 @@ export function useMailPageLogic() {
   const contacts = useContactSuggestions(mailContacts);
   const [deleteToast, setDeleteToast] = useState<{ label: string } | null>(null);
   const [actionToast, setActionToast] = useState<{ label: string; onCancel?: () => void } | null>(null);
-  const [downloadToast, setDownloadToast] = useState<{ name: string } | null>(null);
+  const [downloadToast, setDownloadToast] = useState<{ name: string; open?: () => Promise<void>; error?: string } | null>(null);
   const downloadToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -1256,9 +1256,9 @@ export function useMailPageLogic() {
     setLoadingAttachmentId(`download:${att.attachment_id}`);
     try {
       const data = att.local_data ?? await p.getAttachmentData(att);
-      fileService.downloadBase64(att.name, data, att.content_type);
+      const open = await fileService.downloadOpenable(att.name, data, att.content_type);
       if (downloadToastTimerRef.current) clearTimeout(downloadToastTimerRef.current);
-      setDownloadToast({ name: att.name });
+      setDownloadToast({ name: att.name, open });
       downloadToastTimerRef.current = setTimeout(() => setDownloadToast(null), 15000);
     } catch (e) { setError(String(e)); }
     setLoadingAttachmentId(null);

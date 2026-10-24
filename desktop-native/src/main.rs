@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+mod files;
 mod oauth;
 
 struct DesktopVaultState(std::sync::Mutex<Option<Vec<u8>>>);
@@ -100,8 +101,11 @@ fn open_app_window(
 fn main() {
     tauri::Builder::default()
         .manage(oauth::OAuthState(std::sync::Mutex::new(None)))
+        .manage(files::DownloadedFiles::default())
         .manage(DesktopVaultState(std::sync::Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
+            files::save_download,
+            files::open_download,
             mail_command,
             detect_new_mail,
             oauth::start_oauth_listener,

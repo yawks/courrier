@@ -1,3 +1,4 @@
+import { plugin as androidFiles } from '../platform/nativeAndroid';
 import { platform } from '../platform';
 import { getTauriInvoke, isTauriRuntime } from '../platform/tauriRuntime';
 
@@ -27,6 +28,20 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 export const fileService = {
+  async downloadOpenable(filename: string, data: string, contentType = 'application/octet-stream'): Promise<(() => Promise<void>) | undefined> {
+    const invoke = getTauriInvoke();
+    if (invoke) {
+      const bytes = Array.from(new Uint8Array(await base64ToBlob(data, contentType).arrayBuffer()));
+      const path = await invoke<string>('save_download', { name: filename, bytes });
+      return () => invoke<void>('open_download', { path });
+    }
+    if (platform.isNativeAndroid) {
+      const { path } = await androidFiles.saveDownload({ name: filename, data, contentType });
+      return () => androidFiles.openDownload({ path, contentType });
+    }
+    fileService.downloadBase64(filename, data, contentType);
+  },
+
   downloadBase64(filename: string, data: string, contentType?: string): void {
     downloadBlob(base64ToBlob(data, contentType), filename);
   },
