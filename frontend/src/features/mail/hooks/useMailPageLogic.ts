@@ -19,7 +19,7 @@ import { RecipientEntry } from '../components/RecipientInput';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MAIL_KEYS, useMailFolders, useAllAccountFolders, useMailThreads, useAllAccountThreads, useMailConversation, useMailSearch, useAllAccountSearch, useAllAccountIdentities } from './useMailQueries';
 import { useMailMutations } from './useMailMutations';
-import { useMailConversationReadSync, useMailThreadReadSync } from './useMailThreadReadSync';
+import { useMailConversationRefresh, useMailConversationReadSync, useMailThreadReadSync } from './useMailThreadReadSync';
 import { cleanupContactIndex, recordContactObservations, searchContactIndex, type ContactObservation } from '../utils/contactIndex';
 import { useContactBackfill } from './useContactBackfill';
 import { useOfflineMailSync } from './useOfflineMailSync';
@@ -295,6 +295,13 @@ export function useMailPageLogic() {
 
   const messagesLoading = conversationQuery.isLoading;
   const messagesFetching = conversationQuery.isFetching;
+
+  useMailConversationRefresh(
+    selectedThread?.accountId ?? selectedAccountId,
+    isOptimisticThread ? undefined : selectedThread?.conversation_id,
+    rawThreads,
+    messages,
+  );
 
   useMailConversationReadSync(
     selectedThread?.accountId ?? selectedAccountId,
@@ -840,7 +847,7 @@ export function useMailPageLogic() {
   const toggleRead = useCallback((msg: MailMessage) => {
     if (!selectedThread) return;
     const p = resolveProvider(selectedThread.accountId);
-    if (p) mutations.markRead({ accountId: selectedThread.accountId ?? selectedAccountId, provider: p, conversationId: selectedThread.conversation_id, read: !msg.is_read, folderId: selectedFolder });
+    if (p) mutations.markRead({ accountId: selectedThread.accountId ?? selectedAccountId, provider: p, conversationId: selectedThread.conversation_id, read: !msg.is_read, specificMessages: [msg], folderId: selectedFolder });
   }, [mutations, selectedThread, resolveProvider, selectedAccountId, selectedFolder]);
 
   const selectNextThread = useCallback((threadId: string) => {

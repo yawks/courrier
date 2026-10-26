@@ -105,7 +105,7 @@ export function useMailMutations() {
         if (old.length > 0 && !('conversation_id' in old[0])) return old;
         let changed = false;
         const next = old.map((t: MailThread) => {
-          if (t.conversation_id === conversationId) {
+          if (t.conversation_id === conversationId && (!t.accountId || t.accountId === accountId)) {
             const targetUnread = read ? Math.max(0, t.unread_count - unreadDelta) : t.message_count;
             if (t.unread_count !== targetUnread) {
               changed = true;

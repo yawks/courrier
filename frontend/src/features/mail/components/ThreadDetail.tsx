@@ -123,18 +123,6 @@ export function ThreadDetail({
   useEffect(() => { setSnoozeBannerDismissed(false); }, [thread.conversation_id]);
   const composerAnchorRef = useRef<HTMLDivElement>(null);
 
-  const markedConversationRef = useRef<string | null>(null);
-  useEffect(() => {
-    markedConversationRef.current = null;
-  }, [thread.accountId, thread.conversation_id]);
-  useEffect(() => {
-    if (messagesLoading || messagesFetching || markedConversationRef.current === thread.conversation_id) return;
-    const unread = messages.filter(message => !message.is_read);
-    if (!unread.length) return;
-    markedConversationRef.current = thread.conversation_id;
-    onMarkRead(unread);
-  }, [messages, messagesLoading, messagesFetching, onMarkRead, thread.accountId, thread.conversation_id]);
-
   useEffect(() => {
     if (!replyingTo) return;
     // Defer until the browser has painted the newly mounted composer
@@ -423,6 +411,7 @@ export function ThreadDetail({
               onExpand={() => setMiddleExpandedConversationId(thread.conversation_id)}
             />
             <MessageBlock
+              key={`${thread.accountId}:${thread.conversation_id}:${messages[messages.length - 1].item_id}`}
               message={messages[messages.length - 1]}
               conversationId={thread.conversation_id}
               defaultExpanded={messages[messages.length - 1].item_id === initiallyExpandedId}
@@ -435,6 +424,7 @@ export function ThreadDetail({
               onForward={onForward}
               onTrash={onTrash}
               onToggleRead={onToggleRead}
+              onMarkRead={messagesFetching ? undefined : onMarkRead}
               onPreviewAttachment={onPreviewAttachment}
               onDownloadAttachment={onDownloadAttachment}
               onGetAttachmentData={onGetAttachmentData}
@@ -447,7 +437,7 @@ export function ThreadDetail({
         )}
         {!messagesLoading && !(messages.length > 5 && !middleExpanded && initiallyExpandedId === lastMsg?.item_id) && messages.map((msg) => (
           <MessageBlock
-            key={msg.item_id}
+            key={`${thread.accountId}:${thread.conversation_id}:${msg.item_id}`}
             message={msg}
             conversationId={thread.conversation_id}
             defaultExpanded={msg.item_id === initiallyExpandedId}
@@ -460,6 +450,7 @@ export function ThreadDetail({
             onForward={onForward}
             onTrash={onTrash}
             onToggleRead={onToggleRead}
+            onMarkRead={messagesFetching ? undefined : onMarkRead}
             onPreviewAttachment={onPreviewAttachment}
             onDownloadAttachment={onDownloadAttachment}
             onGetAttachmentData={onGetAttachmentData}

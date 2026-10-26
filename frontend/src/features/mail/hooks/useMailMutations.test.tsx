@@ -16,6 +16,41 @@ vi.mock('./useOfflineMailSync', () => ({ synchronizeOfflineInboxAccount: vi.fn()
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+it.each(['gmail', 'ews', 'imap', 'jmap'] as const)('%s: reads each opened message independently, preserving unread siblings and other accounts', async providerType => {
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const root = createRoot(document.createElement('div'));
+  let mutations!: ReturnType<typeof useMailMutations>;
+  function Harness() { mutations = useMailMutations(); return null; }
+  const messages = ['first', 'second'].map(item_id => ({ item_id, change_key: 'key', is_read: false })) as MailMessage[];
+  const key = [...MAIL_KEYS.threads('account', 'inbox'), 50, 0];
+  const unifiedKey = ['mail', 'all', 'threads', 'inbox'];
+  const messageKey = [...MAIL_KEYS.thread('account', 'thread'), 'inbox', false, false];
+  const row = { conversation_id: 'thread', accountId: 'account', message_count: 2, unread_count: 2 } as MailThread;
+  const other = { ...row, accountId: 'other' };
+  client.setQueryData(key, [row]);
+  client.setQueryData(unifiedKey, [row, other]);
+  client.setQueryData(messageKey, messages);
+  const provider = { providerType, markRead: vi.fn().mockResolvedValue(undefined), getThread: vi.fn() } as unknown as MailProvider;
+  await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>));
+  const mark = async (message: MailMessage) => act(async () => {
+    await new Promise<void>(resolve => mutations.markRead({ accountId: 'account', provider, conversationId: 'thread', read: true, specificMessages: [message] }, { onSettled: () => resolve() }));
+  });
+  try {
+    await mark(messages[0]);
+    expect(client.getQueryData(key)).toEqual([{ ...row, unread_count: 1 }]);
+    expect(client.getQueryData(unifiedKey)).toEqual([{ ...row, unread_count: 1 }, other]);
+    expect(client.getQueryData(messageKey)).toEqual([{ ...messages[0], is_read: true }, messages[1]]);
+    await mark(messages[1]);
+    expect(client.getQueryData(key)).toEqual([{ ...row, unread_count: 0 }]);
+    expect(provider.markRead).toHaveBeenNthCalledWith(1, [{ item_id: 'first', change_key: 'key', conversation_id: 'thread' }]);
+    expect(provider.markRead).toHaveBeenNthCalledWith(2, [{ item_id: 'second', change_key: 'key', conversation_id: 'thread' }]);
+    expect(provider.getThread).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+  }
+});
+
 it('restores each folder and page after a read failure, then can mark another email read', async () => {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
   const root = createRoot(document.createElement('div'));

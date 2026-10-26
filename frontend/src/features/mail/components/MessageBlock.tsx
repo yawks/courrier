@@ -25,6 +25,7 @@ export interface MessageBlockProps {
   readonly onForward: (msg: MailMessage) => void;
   readonly onTrash: (message: MailMessage) => void;
   readonly onToggleRead: (msg: MailMessage) => void;
+  readonly onMarkRead?: (msgs: MailMessage[]) => void;
   readonly onPreviewAttachment: (att: MailAttachment) => void;
   readonly onDownloadAttachment: (att: MailAttachment) => void;
   readonly onGetAttachmentData: (att: MailAttachment) => Promise<string>;
@@ -61,7 +62,7 @@ async function decodeInlineImages(html: string): Promise<void> {
 
 export function MessageBlock({
   message, conversationId, defaultExpanded = false, scrollIntoViewOnMount = false, currentUserEmail, mailProviderType, provider,
-  onReply, onReplyAll, onForward, onNewToRecipients, onTrash, onToggleRead,
+  onReply, onReplyAll, onForward, onNewToRecipients, onTrash, onToggleRead, onMarkRead,
   onPreviewAttachment, onDownloadAttachment, onGetAttachmentData, loadingAttachmentId,
   isInScheduledFolder = false, onScheduledSendCanceled,
   onBodyReady,
@@ -126,6 +127,15 @@ export function MessageBlock({
   });
   const displayedMessage = contentQuery.data ? { ...message, ...contentQuery.data, body_loaded: true } : message;
   const bodyLoading = isExpanded && displayedMessage.body_loaded === false && !contentQuery.isError;
+  const markedMessageRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isExpanded || bodyLoading || contentQuery.isError || message.is_read || !onMarkRead
+      || markedMessageRef.current === message.item_id) return;
+    // Only the opened block is read. Keep a manually restored unread state
+    // until the user closes and opens this block again.
+    markedMessageRef.current = message.item_id;
+    onMarkRead([message]);
+  }, [isExpanded, bodyLoading, contentQuery.isError, message, onMarkRead]);
   useEffect(() => {
     if ((!onBodyReady && !notificationOpening) || !isExpanded || bodyLoading) return;
     // Some Android WebView documents never produce a measurable height during
@@ -197,6 +207,7 @@ export function MessageBlock({
 
   const handleToggleExpand = () => {
     if (isExpanded) {
+      markedMessageRef.current = null;
       setIsExpanded(false);
       return;
     }
