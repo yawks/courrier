@@ -137,6 +137,9 @@ export default function AttendeeInput({ value, onChange, allEvents }: Props) {
           onKeyDown={handleKeyDown}
           placeholder={t('attendeeInput.placeholder')}
           autoComplete="off"
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="none"
         />
         {open && filtered.length > 0 && (
           <ul ref={listRef} className="attendee-dropdown">

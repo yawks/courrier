@@ -197,7 +197,7 @@ pub async fn ews_create_event(
     let description = if online_meeting {
         let refresh = refresh_token.as_deref().filter(|s| !s.is_empty())
             .ok_or("teams_auth_required")?;
-        let token = get_graph_token_for_scope(refresh, "https://graph.microsoft.com/OnlineMeetings.ReadWrite offline_access").await.map_err(|_| "teams_auth_required".to_string())?;
+        let token = get_graph_token_for_scope(refresh, "https://graph.microsoft.com/OnlineMeetings.ReadWrite offline_access").await?;
         let date_time = |value: &str| if value.len() == 10 { format!("{value}T00:00:00Z") } else { value.to_string() };
         let response = reqwest::Client::new()
             .post("https://graph.microsoft.com/v1.0/me/onlineMeetings")
@@ -205,7 +205,9 @@ pub async fn ews_create_event(
             .json(&serde_json::json!({ "subject": title, "startDateTime": date_time(&start), "endDateTime": date_time(&end) }))
             .send().await.map_err(|_| "teams_request_failed".to_string())?;
         if !response.status().is_success() {
-            return Err(format!("teams_creation_failed_http_{}", response.status().as_u16()));
+            let status = response.status().as_u16();
+            let body = response.json().await.unwrap_or(serde_json::Value::Null);
+            return Err(teams_microsoft_error("creation", status, &body));
         }
         let meeting: serde_json::Value = response.json().await.map_err(|_| "teams_invalid_response".to_string())?;
         let url = meeting["joinWebUrl"].as_str().filter(|url| url.starts_with("https://"))
@@ -723,6 +725,20 @@ fn parse_availability(xml: &str, emails: &[String]) -> Result<std::collections::
     Ok(result)
 }
 
+// Only return bounded machine-readable codes, never Microsoft's free-form messages,
+// which can contain account identifiers or other sensitive request information.
+fn teams_microsoft_error(phase: &str, status: u16, body: &serde_json::Value) -> String {
+    let code = body["error"]["code"].as_str().or_else(|| body["error"].as_str())
+        .filter(|value| !value.is_empty() && value.len() <= 80
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
+        .unwrap_or("unknown");
+    let mut error = format!("teams_{phase}_failed_http_{status}:{code}");
+    if let Some(aadsts) = body["error_codes"].as_array().and_then(|codes| codes.first()).and_then(|code| code.as_u64()) {
+        error.push_str(&format!(":AADSTS{aadsts}"));
+    }
+    error
+}
+
 async fn get_graph_token_for_scope(refresh_token: &str, scope: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
     let scope = urlencoding::encode(scope);
@@ -738,20 +754,18 @@ async fn get_graph_token_for_scope(refresh_token: &str, scope: &str) -> Result<S
         .body(body)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "teams_request_failed".to_string())?;
 
-    let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
-        let desc = json
-            .get("error_description")
-            .and_then(|e| e.as_str())
-            .unwrap_or("");
-        return Err(format!("Graph token error: {}: {}", err, desc));
+    let status = response.status();
+    let json: serde_json::Value = response.json().await.map_err(|_| "teams_invalid_response".to_string())?;
+    if !status.is_success() || json.get("error").is_some() {
+        return Err(teams_microsoft_error("auth", status.as_u16(), &json));
     }
     json["access_token"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| "No access_token in Graph token response".to_string())
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "teams_invalid_response".to_string())
 }
 
 /// Respond to a meeting invitation.
@@ -921,6 +935,28 @@ mod response_tests {
 
 #[cfg(test)]
 mod online_meeting_tests {
+    #[test]
+    fn teams_errors_preserve_oauth_codes_without_account_details() {
+        let body = serde_json::json!({
+            "error": "invalid_grant", "error_codes": [65001],
+            "error_description": "Consent required for private@example.com",
+            "access_token": "secret",
+        });
+        assert_eq!(super::teams_microsoft_error("auth", 400, &body),
+            "teams_auth_failed_http_400:invalid_grant:AADSTS65001");
+    }
+
+    #[test]
+    fn teams_errors_preserve_graph_codes_and_handle_unexpected_responses() {
+        assert_eq!(super::teams_microsoft_error("creation", 403, &serde_json::json!({
+            "error": { "code": "Forbidden", "message": "Private account details" }
+        })), "teams_creation_failed_http_403:Forbidden");
+        for body in [serde_json::Value::Null, serde_json::json!({ "error": "unexpected account details" })] {
+            assert_eq!(super::teams_microsoft_error("creation", 503, &body),
+                "teams_creation_failed_http_503:unknown");
+        }
+    }
+
     #[tokio::test]
     async fn teams_requires_refresh_token_before_creating_an_ews_event() {
         let result = super::ews_create_event(

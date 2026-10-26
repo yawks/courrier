@@ -12,6 +12,7 @@ import { queryEWSFreeBusy } from '../utils/ewsApi';
 import { useTags } from '../store/TagStore';
 import { useTranslation } from 'react-i18next';
 import { MailEditor, MailEditorHandle } from '../../mail/components/MailEditor';
+import { localizeTeamsError } from '../../../shared/utils/teamsError';
 
 export type EditRecurringScope = 'this' | 'future';
 
@@ -371,7 +372,7 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
         location,
         description: isExchangeCalendar ? descriptionEditorRef.current?.getHTML() ?? description : description,
         calendarId,
-        onlineMeeting: !isEditing && (isGoogleCalendar || isExchangeCalendar) ? onlineMeeting : undefined,
+        onlineMeeting: !isEditing && (isGoogleCalendar || isExchangeCalendar) ? isGoogleCalendar && onlineMeeting : undefined,
         attendees: specialGoogleEvent ? undefined : attendees,
         recurrence: scope === 'this' ? undefined : recurrence,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -381,7 +382,7 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
       onClose();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setError(message.includes('ews_attendees_verification_failed') ? t('createEvent.attendeesVerificationError') : message.includes('teams_') ? t('createEvent.teamsError') : err instanceof Error ? err.message : t('createEvent.saveError'));
+      setError(message.includes('ews_attendees_verification_failed') ? t('createEvent.attendeesVerificationError') : localizeTeamsError(message) ?? (err instanceof Error ? err.message : t('createEvent.saveError')));
       setSaving(false);
     }
   };
@@ -609,12 +610,12 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
             </div>}
 
             {!isEditing && !specialGoogleEvent && (isGoogleCalendar || isExchangeCalendar) && (
-              <label className="event-conference" htmlFor="ev-conference">
+              <label className={`event-conference${isExchangeCalendar ? ' event-conference--unavailable' : ''}`} htmlFor="ev-conference">
                 <svg className="event-conference__icon" viewBox="0 0 24 24" aria-hidden="true">
                   {isExchangeCalendar ? <><circle cx="17" cy="6" r="3" fill="currentColor" /><path d="M12 10h10v7a4 4 0 0 1-8 0" fill="currentColor" /><rect x="1" y="6" width="14" height="15" rx="2" fill="currentColor" /><path d="M4 10h8M8 10v8" stroke="var(--bg)" strokeWidth="2" /></> : <><rect x="2" y="5" width="14" height="14" rx="3" fill="currentColor" /><path d="m16 10 6-4v12l-6-4z" fill="currentColor" /></>}
                 </svg>
                 <span>{t(isExchangeCalendar ? 'createEvent.teamsMeeting' : 'createEvent.meetMeeting')}</span>
-                <input id="ev-conference" type="checkbox" role="switch" checked={onlineMeeting} onChange={e => setOnlineMeeting(e.target.checked)} disabled={saving} />
+                <input id="ev-conference" type="checkbox" role="switch" checked={isGoogleCalendar && onlineMeeting} onChange={e => setOnlineMeeting(e.target.checked)} disabled={saving || isExchangeCalendar} />
                 <span className="event-conference__switch" aria-hidden="true" />
               </label>
             )}
