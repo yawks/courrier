@@ -784,6 +784,7 @@ export function useCalendarLogic() {
     handleToday,
     getValidToken,
     getExchangeRefreshToken,
+    getExchangeToken,
     handleNavigateToDate,
     handleViewChange,
     handleSaveEvent,

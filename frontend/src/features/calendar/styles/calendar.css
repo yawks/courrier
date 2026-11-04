@@ -1586,6 +1586,23 @@
 .event-conference.event-conference--unavailable { cursor: not-allowed; color: var(--text-muted); }
 .event-conference--unavailable .event-conference__icon { color: var(--text-muted); }
 
+/* Optional room discovery in the free-text location field. */
+.location-input { --location-room-free: #187a46; position: relative; min-width: 0; }
+[data-theme="dark"] .location-input { --location-room-free: #71dca5; }
+.location-input input { width: 100%; box-sizing: border-box; }
+.location-input__suggestions { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; max-height: 240px; overflow-y: auto; margin: 4px 0 0; padding: 4px; list-style: none; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.location-input__option { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 7px 10px; box-sizing: border-box; border-radius: 6px; cursor: pointer; font-size: calc(14px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.location-input__name { flex: 1; min-width: 0; line-height: 1.4; }
+.location-input__option:hover, .location-input__option--active { background: var(--bg-hover); }
+.location-input__option--active { outline: 2px solid var(--primary); outline-offset: -2px; }
+.location-input__availability, .location-input__help { color: var(--text-muted); font-size: calc(12px * var(--font-scale, 1)); line-height: 1.45; }
+.location-input__availability { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 0 0 auto; max-width: 50%; padding: 3px 7px; box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 7%, var(--bg)); font-weight: 500; }
+.location-input__availability--free { color: var(--location-room-free); background: color-mix(in srgb, var(--location-room-free) 9%, var(--bg)); }
+.location-input__availability--busy { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--bg)); }
+.location-input__status-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.location-input__availability--checking .location-input__status-dot { background: transparent; border: 1px solid currentColor; box-sizing: border-box; }
+.location-input__help { margin: 6px 0 0; }
+
 /* Shared calendars */
 .shared-calendar-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; width: min(640px, calc(100vw - 24px)); max-width: none; max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--bg); box-shadow: var(--shadow); overflow: auto; }
 .shared-calendar-dialog::backdrop { background: color-mix(in srgb, var(--text) 35%, transparent); }

@@ -15,6 +15,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const exchangeCalendarApi = {
+  rooms: (request: { accessToken: string; query?: string }): Promise<Array<{ name: string; email: string; directory?: boolean }>> => post('rooms', request),
   shared: (request: Record<string, unknown>): Promise<{ calendars: Array<{ id: string; name: string }>; limitedDiscovery: boolean }> => post('shared', request),
   recurrence: (request: Record<string, unknown>): Promise<string | null> => post<string | null>('recurrence', request),
   list: <T>(request: Record<string, unknown>): Promise<T> => post<T>('list', request),

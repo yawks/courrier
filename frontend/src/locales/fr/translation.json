@@ -280,6 +280,15 @@
     "optional": "(optionnel)",
     "location": "Lieu",
     "locationPlaceholder": "Salle, adresse…",
+    "roomSuggestions": "Salles et ressources",
+    "roomAvailability": {
+      "free": "Libre",
+      "busy": "Occupée",
+      "tentative": "Réservation provisoire",
+      "unknown": "Disponibilité inconnue",
+      "checking": "Vérification…"
+    },
+    "roomLocationOnly": "Les suggestions renseignent uniquement le lieu ; elles ne réservent pas la salle.",
     "description": "Description",
     "save": "Enregistrer",
     "create": "Créer",

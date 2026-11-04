@@ -28,6 +28,19 @@ describe('exchangeCalendarApi', () => {
     await expect(exchangeCalendarApi.create({ title: 'Meeting' })).resolves.toBe('item|change');
   });
 
+  it('discovers rooms through the web endpoint and the shared native command', async () => {
+    const request = { accessToken: 'token' };
+    const rooms = [{ name: 'Room A', email: 'a@example.test' }];
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(rooms)));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(exchangeCalendarApi.rooms(request)).resolves.toEqual(rooms);
+    expect(fetchMock).toHaveBeenCalledWith('/api/calendar/exchange/rooms', expect.objectContaining({ method: 'POST' }));
+    vi.mocked(hasNativeTransport).mockReturnValue(true);
+    vi.mocked(invokeNative).mockResolvedValue(rooms);
+    await expect(exchangeCalendarApi.rooms(request)).resolves.toEqual(rooms);
+    expect(invokeNative).toHaveBeenCalledWith('exchange_calendar_rooms', request);
+  });
+
   it('sends edited participants and surfaces Exchange failures', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'ErrorAccessDenied' }), { status: 502 }));
     vi.stubGlobal('fetch', fetchMock);

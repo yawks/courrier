@@ -72,6 +72,19 @@ pub struct FreeBusyRequest { anchor_mailbox: Option<String>, refresh_token: Stri
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomsRequest { access_token: String, query: Option<String> }
+
+pub async fn rooms(Json(request): Json<RoomsRequest>) -> Result<Json<Vec<app_lib::ews::rooms::EwsRoom>>, ApiError> {
+    let result = match request.query {
+        Some(query) => app_lib::ews::rooms::ews_search_room_directory(request.access_token, query).await,
+        None => app_lib::ews::rooms::ews_discover_rooms(request.access_token).await,
+    };
+    result.map(Json)
+        .map_err(|_| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": "ews_room_discovery_failed" }))))
+}
+
 fn escape(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }

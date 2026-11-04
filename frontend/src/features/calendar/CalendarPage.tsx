@@ -108,6 +108,7 @@ export default function CalendarPage() {
     handleToday,
     getValidToken,
     getExchangeRefreshToken,
+    getExchangeToken,
     handleNavigateToDate,
     handleViewChange,
     handleSaveEvent,
@@ -487,6 +488,7 @@ export default function CalendarPage() {
           }}
           getValidToken={getValidToken}
           getExchangeRefreshToken={getExchangeRefreshToken}
+          getExchangeToken={getExchangeToken}
         />
       )}
 
@@ -514,6 +516,7 @@ export default function CalendarPage() {
           onClose={() => setEditEvent(null)}
           getValidToken={getValidToken}
           getExchangeRefreshToken={getExchangeRefreshToken}
+          getExchangeToken={getExchangeToken}
         />
       )}
     </div>

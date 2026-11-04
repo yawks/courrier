@@ -13,6 +13,7 @@ import { useTags } from '../store/TagStore';
 import { useTranslation } from 'react-i18next';
 import { MailEditor, MailEditorHandle } from '../../mail/components/MailEditor';
 import { localizeTeamsError } from '../../../shared/utils/teamsError';
+import LocationInput from './LocationInput';
 
 export type EditRecurringScope = 'this' | 'future';
 
@@ -30,6 +31,7 @@ interface Props {
   readonly getValidToken?: (accountId: string) => Promise<string | null>;
   /** Required to query freebusy for Exchange calendars (synchronous refresh token getter) */
   readonly getExchangeRefreshToken?: (accountId: string) => string | null;
+  readonly getExchangeToken?: (accountId: string) => Promise<string | null>;
 }
 
 function toDatetimeLocal(iso: string): string {
@@ -46,7 +48,7 @@ function toDateLocal(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export default function CreateEventModal({ initialStart, initialEnd, writableCalendars, allEvents, editEvent, onSubmit, onClose, getValidToken, getExchangeRefreshToken, loadRecurrence }: Props) {
+export default function CreateEventModal({ initialStart, initialEnd, writableCalendars, allEvents, editEvent, onSubmit, onClose, getValidToken, getExchangeRefreshToken, getExchangeToken, loadRecurrence }: Props) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const descriptionEditorRef = useRef<MailEditorHandle>(null);
@@ -576,12 +578,16 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
                 <MapPin className="event-editor-row-icon" size={20} aria-hidden="true" />
                 {t('createEvent.location')} <span className="event-editor-field-hint">{t('createEvent.optional')}</span>
               </label>
-              <input
-                id="ev-location"
-                type="text"
+              <LocationInput
+                key={calendarId}
+                calendar={selectedCalendar}
                 value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder={t('createEvent.locationPlaceholder')}
+                onChange={setLocation}
+                start={isAllday ? `${startDate}T00:00:00` : start}
+                end={isAllday ? `${endDate}T00:00:00` : end}
+                getValidToken={getValidToken}
+                getExchangeToken={getExchangeToken}
+                getExchangeRefreshToken={getExchangeRefreshToken}
               />
             </div>}
 

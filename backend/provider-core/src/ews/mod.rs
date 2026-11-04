@@ -182,6 +182,7 @@ mod throttle;
 pub mod recurrence;
 pub mod calendar;
 pub use calendar::*;
+pub mod rooms;
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 

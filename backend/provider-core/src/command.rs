@@ -537,6 +537,16 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
             let a: SharedRequest = args(value)?;
             output(crate::ews::ews_shared_calendars(a.access_token, a.email).await)
         }
+        "exchange_calendar_rooms" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct RoomsRequest { access_token: String, query: Option<String> }
+            let a: RoomsRequest = args(value)?;
+            output(match a.query {
+                Some(query) => crate::ews::rooms::ews_search_room_directory(a.access_token, query).await,
+                None => crate::ews::rooms::ews_discover_rooms(a.access_token).await,
+            })
+        }
         "calendar_caldav_query" => {
             let a: crate::caldav::Query = args(value)?;
             output(crate::caldav::query(a).await)

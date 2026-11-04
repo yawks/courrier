@@ -280,6 +280,15 @@
     "optional": "(optional)",
     "location": "Location",
     "locationPlaceholder": "Room, address…",
+    "roomSuggestions": "Rooms and resources",
+    "roomAvailability": {
+      "free": "Available",
+      "busy": "Busy",
+      "tentative": "Tentatively booked",
+      "unknown": "Availability unknown",
+      "checking": "Checking…"
+    },
+    "roomLocationOnly": "Suggestions fill the location only; they do not reserve the room.",
     "description": "Description",
     "save": "Save",
     "create": "Create",
