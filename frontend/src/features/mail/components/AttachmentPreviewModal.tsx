@@ -3,10 +3,9 @@ import { OfficeAttachmentPreview } from './OfficeAttachmentPreview';
 import { getOfficeFormat } from '../utils/officeAttachment';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MailAttachment } from '../types';
-import { X, RefreshCw, Download } from 'lucide-react';
+import { X, RefreshCw, Download, ZoomIn, ZoomOut } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { FileTypeIcon } from '../utils';
-import { platform } from '../../../shared/platform';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 export interface AttachmentPreviewModalProps {
@@ -18,10 +17,20 @@ export interface AttachmentPreviewModalProps {
   readonly onDownload?: () => Promise<void>;
 }
 
-function AndroidPdfPreview({ bytes }: { readonly bytes: Uint8Array }) {
+function PdfPreview({ bytes, zoom }: { readonly bytes: Uint8Array; readonly zoom: number }) {
+  const { t } = useTranslation();
   const pagesRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
   const [rendering, setRendering] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const pages = pagesRef.current;
+    if (!pages || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setWidth(pages.clientWidth));
+    observer.observe(pages);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,18 +38,21 @@ function AndroidPdfPreview({ bytes }: { readonly bytes: Uint8Array }) {
     if (!pages) return;
     pages.replaceChildren();
     setRendering(true);
-    setError('');
+    setError(false);
 
     let task: ReturnType<typeof import('pdfjs-dist')['getDocument']> | null = null;
     void import('pdfjs-dist').then(async ({ getDocument, GlobalWorkerOptions }) => {
+      if (cancelled) return;
       GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
       task = getDocument({ data: bytes.slice() });
       const pdf = await task.promise;
+      if (cancelled) return;
       for (let pageNumber = 1; pageNumber <= pdf.numPages && !cancelled; pageNumber += 1) {
         const page = await pdf.getPage(pageNumber);
+        if (cancelled) return;
         const initialViewport = page.getViewport({ scale: 1 });
         const availableWidth = Math.max(1, pages.clientWidth);
-        const cssScale = availableWidth / initialViewport.width;
+        const cssScale = availableWidth / initialViewport.width * zoom / 100;
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         const viewport = page.getViewport({ scale: cssScale * pixelRatio });
         const canvas = document.createElement('canvas');
@@ -55,10 +67,10 @@ function AndroidPdfPreview({ bytes }: { readonly bytes: Uint8Array }) {
         await page.render({ canvasContext: context, viewport }).promise;
       }
       if (!cancelled) setRendering(false);
-    }).catch(reason => {
+    }).catch(() => {
       if (!cancelled) {
         setRendering(false);
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(true);
       }
     });
 
@@ -66,13 +78,13 @@ function AndroidPdfPreview({ bytes }: { readonly bytes: Uint8Array }) {
       cancelled = true;
       if (task) void task.destroy();
     };
-  }, [bytes]);
+  }, [bytes, zoom, width]);
 
   return (
-    <div className="mail-preview-modal__pdf-android">
+    <div className="mail-preview-modal__pdf-viewport" aria-busy={rendering}>
       <div ref={pagesRef} className="mail-preview-modal__pdf-pages" />
-      {rendering && <RefreshCw size={32} className="spin mail-preview-modal__pdf-loader" />}
-      {error && <div className="mail-preview-modal__pdf-error">{error}</div>}
+      {rendering && <span role="status" aria-label={t('mail.office.loading')} className="mail-preview-modal__pdf-loader"><RefreshCw size={32} className="spin" /></span>}
+      {error && <div className="mail-preview-modal__pdf-error" role="alert">{t('mail.office.error')}</div>}
     </div>
   );
 }
@@ -83,6 +95,8 @@ export function AttachmentPreviewModal({ attachment, loading, data, onClose, loa
   const downloadGenerationRef = useRef(0);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
+  const [pdfZoom, setPdfZoom] = useState(100);
+  useEffect(() => { setPdfZoom(100); }, [attachment, data]);
   useEffect(() => {
     downloadGenerationRef.current += 1;
     setDownloading(false);
@@ -92,9 +106,6 @@ export function AttachmentPreviewModal({ attachment, loading, data, onClose, loa
   const officeFormat = getOfficeFormat(attachment.name, attachment.content_type);
   const isImage = attachment.content_type.startsWith('image/');
   const isPdf = attachment.content_type.includes('pdf') || attachment.name.toLowerCase().endsWith('.pdf');
-  // Chromium does not reliably allow a PDF data URL to be loaded in a child
-  // frame once the app is installed as a PWA. A same-origin blob URL also
-  // avoids hitting the browser's data-URL length limits for large documents.
   const previewBytes = useMemo(() => {
     if (!data) return null;
     const compact = data.replaceAll(/\s/g, '');
@@ -104,9 +115,9 @@ export function AttachmentPreviewModal({ attachment, loading, data, onClose, loa
     return bytes;
   }, [data]);
   const previewUrl = useMemo(() => {
-    if (!previewBytes) return null;
+    if (!previewBytes || isPdf) return null;
     return URL.createObjectURL(new Blob([previewBytes], {
-      type: isPdf ? 'application/pdf' : attachment.content_type,
+      type: attachment.content_type,
     }));
   }, [attachment.content_type, isPdf, previewBytes]);
 
@@ -157,6 +168,11 @@ export function AttachmentPreviewModal({ attachment, loading, data, onClose, loa
           <button ref={closeRef} type="button" className="btn-icon" aria-label={t('mail.office.close')} title={t('mail.office.close')} onClick={onClose}><X size={16} /></button>
         </div>
         {downloadError && <p className="mail-office-download-error" role="alert">{t('mail.office.downloadError')}</p>}
+        {isPdf && <div className="mail-preview-modal__pdf-toolbar">
+          <button type="button" className="btn-ghost" aria-label={t('mail.office.zoomOut')} title={t('mail.office.zoomOut')} disabled={loading || !previewBytes || pdfZoom <= 50} onClick={() => setPdfZoom(value => Math.max(50, value - 25))}><ZoomOut size={16} /></button>
+          <span role="status">{pdfZoom}%</span>
+          <button type="button" className="btn-ghost" aria-label={t('mail.office.zoomIn')} title={t('mail.office.zoomIn')} disabled={loading || !previewBytes || pdfZoom >= 300} onClick={() => setPdfZoom(value => Math.min(300, value + 25))}><ZoomIn size={16} /></button>
+        </div>}
         <div className="mail-preview-modal__body">
           {officeFormat && loadOffice && <OfficeAttachmentPreview format={officeFormat} load={loadOffice} />}
           {loading && (
@@ -167,11 +183,8 @@ export function AttachmentPreviewModal({ attachment, loading, data, onClose, loa
           {!loading && previewUrl && isImage && (
             <img src={previewUrl} alt={attachment.name} className="mail-preview-modal__img" />
           )}
-          {!loading && previewBytes && isPdf && platform.isNativeAndroid && (
-            <AndroidPdfPreview bytes={previewBytes} />
-          )}
-          {!loading && previewUrl && isPdf && !platform.isNativeAndroid && (
-            <iframe src={previewUrl} title={attachment.name} className="mail-preview-modal__iframe" />
+          {!loading && previewBytes && isPdf && (
+            <PdfPreview bytes={previewBytes} zoom={pdfZoom} />
           )}
         </div>
       </dialog>
