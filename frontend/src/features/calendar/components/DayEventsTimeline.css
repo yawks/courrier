@@ -1,4 +1,6 @@
 .det-container {
+  --det-invitation-bg: #ffe600;
+  --det-invitation-text: #211b00;
   display: flex;
   flex-direction: column;
   width: 200px;
@@ -116,6 +118,14 @@
   min-height: 18px;
 }
 
+.det-event--highlighted:not(.det-event--cancelled) {
+  background-color: var(--det-invitation-bg);
+  background-clip: padding-box;
+  color: var(--det-invitation-text);
+  border: 2px solid var(--det-invitation-text);
+  z-index: 1;
+}
+
 .det-event--highlighted.det-event--rsvp-needs-action {
   border-style: dashed;
   border-width: 2px;
@@ -133,6 +143,11 @@
     transparent 2px,
     transparent 6px
   );
+}
+
+.det-event--highlighted.det-event--rsvp-tentative:not(.det-event--cancelled) {
+  border-style: dashed;
+  background-image: none;
 }
 
 .det-event--rsvp-declined .det-event-title {
@@ -153,7 +168,7 @@
 }
 
 .det-event-title {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 500;
   line-height: 1.2;
   display: -webkit-box;

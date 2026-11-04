@@ -74,7 +74,7 @@ export interface DayEventsTimelineProps {
   readonly events: CalendarEvent[];
   readonly calendars: CalendarConfig[];
   readonly targetDate: Date;
-  /** ID of the calendar event matching the ICS invitation — shown with a distinct frame */
+  /** ID of the calendar event matching the ICS invitation — shown with a bright highlight */
   readonly highlightedEventId?: string;
   /** ID of a calendar event that was cancelled — shown struck-through with danger styling */
   readonly cancelledEventId?: string;
@@ -198,8 +198,8 @@ export function DayEventsTimeline({
                     height: `${heightPx}px`,
                     left: `calc(${leftPct}% + 1px)`,
                     width: `calc(${widthPct}% - 3px)`,
-                    // Let CSS handle colours for cancelled events
-                    ...(!isCancelledEv && { backgroundColor: bgColor, color: textColor, borderColor: color }),
+                    // Highlighted invitations and cancellations use semantic CSS colours.
+                    ...(!isCancelledEv && !isHighlighted && { backgroundColor: bgColor, color: textColor, borderColor: color }),
                   }}
                 >
                   <span className="det-event-title"><EventMarkers event={ev} />{ev.title}</span>

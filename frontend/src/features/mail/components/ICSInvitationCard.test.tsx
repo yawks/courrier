@@ -17,12 +17,60 @@ vi.mock('../../calendar/components/EventModal', () => ({ default: (props: unknow
 vi.mock('./EmailHtmlBody', () => ({ EmailHtmlBody: () => null }));
 vi.mock('../../calendar/utils/googleCalendarApi', () => ({ updateEvent: vi.fn(), respondToGoogleEvent: vi.fn(), createEvent: vi.fn() }));
 vi.mock('../../calendar/utils/nextcloudCalendarApi', () => ({ updateNextcloudEvent: vi.fn(), respondToNextcloudEvent: vi.fn(), createNextcloudEvent: vi.fn() }));
-vi.mock('../../../shared/api/exchangeCalendarApi', () => ({ exchangeCalendarApi: { update: vi.fn() } }));
-import { updateEvent } from '../../calendar/utils/googleCalendarApi';
-import { updateNextcloudEvent } from '../../calendar/utils/nextcloudCalendarApi';
+vi.mock('../../../shared/api/exchangeCalendarApi', () => ({ exchangeCalendarApi: { update: vi.fn(), respond: vi.fn() } }));
+import { updateEvent, respondToGoogleEvent } from '../../calendar/utils/googleCalendarApi';
+import { updateNextcloudEvent, respondToNextcloudEvent } from '../../calendar/utils/nextcloudCalendarApi';
 import { exchangeCalendarApi } from '../../../shared/api/exchangeCalendarApi';
 import { ICSInvitationCard } from './ICSInvitationCard';
 import '../../../i18n';
+
+it.each(['google', 'exchange', 'nextcloud'] as const)('previews a moved REQUEST once, pending a new response on %s', async type => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.clear();
+  localStorage.setItem('ics-rsvp:meeting', 'ACCEPTED');
+  fixtures.calendars = [{ id: type, type, name: type, ownerEmail: 'me@example.test', googleAccountId: 'account', exchangeAccountId: 'account' } as CalendarConfig];
+  fixtures.events = [{ id: 'original', sourceId: 'original|key', icalUid: 'meeting', calendarId: type, title: 'Old title', start: '2026-10-22T08:00:00Z', end: '2026-10-22T09:00:00Z', isAllday: false, category: 'time', selfRsvpStatus: 'ACCEPTED' }];
+  const text = (sequence: number, start = '20261023T100000Z') => ['BEGIN:VCALENDAR', 'VERSION:2.0', 'METHOD:REQUEST', 'BEGIN:VEVENT', 'UID:meeting', `SEQUENCE:${sequence}`, 'SUMMARY:New title', `DTSTART:${start}`, 'DTEND:20261023T110000Z', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ICSInvitationCard source={{ kind: 'text', icsText: text(1) }} />));
+    const preview = () => fixtures.timeline.mock.calls.at(-1)![0].events;
+    expect(preview()).toEqual([expect.objectContaining({ id: 'original', start: '2026-10-23T10:00:00.000Z', selfRsvpStatus: 'NEEDS-ACTION', isUnaccepted: true })]);
+    await act(async () => host.querySelector<HTMLButtonElement>('.ics-btn--accept')!.click());
+    expect(preview()[0].selfRsvpStatus).toBe('ACCEPTED');
+    await act(async () => root.render(<ICSInvitationCard source={{ kind: 'text', icsText: text(2, '20261023T103000Z') }} />));
+    expect(preview()).toEqual([expect.objectContaining({ id: 'original', start: '2026-10-23T10:30:00.000Z', selfRsvpStatus: 'NEEDS-ACTION' })]);
+  } finally { await act(async () => root.unmount()); host.remove(); localStorage.clear(); }
+});
+
+it('does not restore a legacy acceptance over a live pending response', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.setItem('ics-rsvp:meeting', 'ACCEPTED');
+  fixtures.calendars = [{ id: 'exchange', type: 'exchange', name: 'Exchange' } as CalendarConfig];
+  fixtures.events = [{ id: 'original', icalUid: 'meeting', calendarId: 'exchange', title: 'Meeting', start: '2026-10-23T10:00:00Z', end: '2026-10-23T11:00:00Z', isAllday: false, category: 'time', selfRsvpStatus: 'NEEDS-ACTION' }];
+  const text = 'BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:meeting\r\nSUMMARY:Meeting\r\nDTSTART:20261023T100000Z\r\nDTEND:20261023T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR';
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ICSInvitationCard source={{ kind: 'text', icsText: text }} />));
+    expect(fixtures.timeline.mock.calls.at(-1)![0].events[0].selfRsvpStatus).toBe('NEEDS-ACTION');
+  } finally { await act(async () => root.unmount()); host.remove(); localStorage.clear(); }
+});
+
+it.each(['google', 'exchange', 'nextcloud'] as const)('restores the pending update after an RSVP failure on %s', async type => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  fixtures.calendars = [{ id: type, type, name: type, ownerEmail: 'me@example.test', googleAccountId: 'account', exchangeAccountId: 'account' } as CalendarConfig];
+  fixtures.events = [{ id: 'original', sourceId: 'original|key', icalUid: 'meeting', calendarId: type, title: 'Meeting', start: '2026-10-23T08:00:00Z', end: '2026-10-23T09:00:00Z', isAllday: false, category: 'time', selfRsvpStatus: 'ACCEPTED' }];
+  const respond = type === 'google' ? respondToGoogleEvent : type === 'nextcloud' ? respondToNextcloudEvent : exchangeCalendarApi.respond;
+  vi.mocked(respond).mockRejectedValueOnce(new Error('Network failure'));
+  const text = 'BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:meeting\r\nSUMMARY:Meeting\r\nDTSTART:20261023T100000Z\r\nDTEND:20261023T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR';
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ICSInvitationCard source={{ kind: 'text', icsText: text }} />));
+    await act(async () => host.querySelector<HTMLButtonElement>('.ics-btn--accept')!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Network failure');
+    expect(fixtures.timeline.mock.calls.at(-1)![0].events).toEqual([expect.objectContaining({ id: 'original', start: '2026-10-23T10:00:00.000Z', selfRsvpStatus: 'NEEDS-ACTION' })]);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
 
 it('excludes shared calendars from fetching, selection and the day preview for every provider', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;

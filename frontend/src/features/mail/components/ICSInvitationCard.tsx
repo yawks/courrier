@@ -89,11 +89,23 @@ function titlesMatch(evTitle: string, icsTitle: string): boolean {
 
 /** Find the best matching calendar event for the ICS invitation */
 function matchEvent(
-  icsTitle: string,
-  icsStart: string,
-  icsEnd: string,
+  invitation: ICSEventData,
   allEvents: CalendarEvent[],
 ): CalendarEvent | null {
+  const { title: icsTitle, start: icsStart, end: icsEnd } = invitation;
+  const related = invitation.relatedItemId
+    ? allEvents.filter(event => event.sourceId?.split('|')[0] === invitation.relatedItemId)
+    : [];
+  if (related.length === 1) return related[0];
+  const sameUid = invitation.uid ? allEvents.filter(event => event.icalUid === invitation.uid) : [];
+  if (sameUid.length) {
+    const occurrences = sameUid.filter(event => Date.parse(event.recurrenceId ?? event.start)
+      === Date.parse(invitation.recurrenceId ?? invitation.start));
+    if (occurrences.length === 1) return occurrences[0];
+    return sameUid.length === 1 && !sameUid[0].isRecurringInstance && !invitation.recurrenceId ? sameUid[0] : null;
+  }
+  // A different known UID is not the same meeting, even with the same title.
+  allEvents = allEvents.filter(event => !invitation.uid || !event.icalUid);
   const icsStartDay = new Date(icsStart);
   const icsEndDay = new Date(icsEnd);
   // Strict: title match + within 5 min on start + same end day
@@ -146,6 +158,7 @@ interface ICSEventData {
   organizer?: { name: string; email: string };
   attendees: Array<{ name: string; email: string; status: AttendeeStatus; isOrganizer?: boolean }>;
   uid?: string;
+  sequence?: number;
   recurrenceId?: string;
   relatedItemId?: string;
   method?: string;     // VCALENDAR METHOD property (e.g. "CANCEL", "REQUEST", "REPLY")
@@ -214,6 +227,7 @@ function parseRawICS(icsText: string): ICSEventData | null {
       organizer: orgEmail ? { name: attendees[0]?.name ?? orgEmail, email: orgEmail } : undefined,
       attendees,
       uid: ev.uid ?? undefined,
+      sequence: vevent.getFirstPropertyValue('sequence') ?? 0,
       relatedItemId: vevent.getFirstPropertyValue('x-courrier-ews-item-id') ?? undefined,
       recurrenceId: vevent.getFirstPropertyValue('recurrence-id') ? toISO(vevent.getFirstPropertyValue('recurrence-id'), 'recurrence-id') : undefined,
       method,
@@ -408,24 +422,24 @@ function CalendarSelector({
 
 // ── RSVP persistence (localStorage) ──────────────────────────────────────────
 
-function rsvpStorageKey(icsData: ICSEventData): string {
+function rsvpStorageKey(icsData: ICSEventData, calendarId: string): string {
   // Prefer UID if present; otherwise fall back to title + date
   const id = icsData.uid ?? `${icsData.title}::${icsData.start.split('T')[0]}`;
-  return `ics-rsvp:${id}`;
+  return `ics-rsvp:v2:${JSON.stringify([calendarId, id, icsData.recurrenceId, icsData.sequence, icsData.start, icsData.end])}`;
 }
 
-function loadStoredRsvp(icsData: ICSEventData): AttendeeStatus | undefined {
+function loadStoredRsvp(icsData: ICSEventData, calendarId: string): AttendeeStatus | undefined {
   try {
-    const raw = localStorage.getItem(rsvpStorageKey(icsData));
+    const raw = localStorage.getItem(rsvpStorageKey(icsData, calendarId));
     return (raw as AttendeeStatus | null) ?? undefined;
   } catch {
     return undefined;
   }
 }
 
-function saveStoredRsvp(icsData: ICSEventData, status: AttendeeStatus): void {
+function saveStoredRsvp(icsData: ICSEventData, calendarId: string, status: AttendeeStatus): void {
   try {
-    localStorage.setItem(rsvpStorageKey(icsData), status);
+    localStorage.setItem(rsvpStorageKey(icsData, calendarId), status);
   } catch {
     // fail silently
   }
@@ -557,7 +571,7 @@ export function ICSInvitationCard({
     const writableEvents = allEvents.filter(ev => writableCalIds.has(ev.calendarId));
     if (icsData.method === 'COUNTER') return matchCounterProposal(icsData, writableEvents.filter(event =>
       !!event.sourceId && !event.isCancelled && isEventEditable(event, writableCalendars.find(cal => cal.id === event.calendarId), exchangeAccounts)));
-    const result = matchEvent(icsData.title, icsData.start, icsData.end, writableEvents);
+    const result = matchEvent(icsData, writableEvents);
 
     // ── Debug matching (remove once resolved) ────────────────────────────────
     if (!result && writableEvents.length > 0) {
@@ -603,13 +617,13 @@ export function ICSInvitationCard({
   const matchedInSelected = useMemo(() => {
     if (!icsData || !selectedCal) return null;
     const selectedEvents = allEvents.filter(event => event.calendarId === selectedCal.id);
-    return matchEvent(icsData.title, icsData.start, icsData.end, selectedEvents);
+    return matchEvent(icsData, selectedEvents);
   }, [icsData, selectedCal, allEvents]);
 
   // RSVP override set by the user in this session; takes priority over localStorage.
   const [rsvpOverride, setRsvpOverride] = useState<AttendeeStatus | undefined>(undefined);
   // Synchronous localStorage read — avoids one extra render cycle vs useState+useEffect.
-  const storedStatus = icsData ? loadStoredRsvp(icsData) : undefined;
+  const storedStatus = icsData ? loadStoredRsvp(icsData, selectedCalId) : undefined;
 
   const isCancelled = icsData?.method === 'CANCEL';
   const isCounter = icsData?.method === 'COUNTER';
@@ -619,10 +633,12 @@ export function ICSInvitationCard({
   // A session override is immediate; otherwise prefer the live calendar event
   // over localStorage, which may contain an older response.
   const liveStatus = matchedInSelected?.selfRsvpStatus;
+  const hasNewSchedule = icsData?.method === 'REQUEST' && !!matchedInSelected
+    && (Date.parse(matchedInSelected.start) !== Date.parse(icsData.start)
+      || Date.parse(matchedInSelected.end) !== Date.parse(icsData.end)
+      || matchedInSelected.isAllday !== icsData.isAllday);
   const currentStatus = isCounter ? undefined : rsvpOverride
-    ?? (liveStatus && liveStatus !== 'NEEDS-ACTION'
-      ? liveStatus
-      : matchedInSelected ? storedStatus ?? liveStatus : undefined);
+    ?? (hasNewSchedule ? storedStatus ?? 'NEEDS-ACTION' : liveStatus ?? storedStatus);
   const previewDescriptionHtml = icsData?.descriptionHtml
     || (!isCounter && matchedInSelected?.description
       ? invitationDescriptionToHtml(matchedInSelected.description)
@@ -656,7 +672,14 @@ export function ICSInvitationCard({
     const timelineEvents = acceptedCounter
       ? [...allEvents.filter(event => event.id !== acceptedCounter.id), acceptedCounter]
       : allEvents;
-    const filtered = timelineEvents.filter(ev => {
+    const previewEvents = hasNewSchedule && matchedInSelected
+      ? timelineEvents.map(event => event.id === matchedInSelected.id ? {
+        ...event, title: icsData.title, start: icsData.start, end: icsData.end, isAllday: icsData.isAllday,
+        location: icsData.location, description: icsData.descriptionHtml || icsData.description,
+        category: icsData.isAllday ? 'allday' as const : 'time' as const,
+      } : event)
+      : timelineEvents;
+    const filtered = previewEvents.filter(ev => {
       const s = new Date(ev.start);
       return s >= day && s <= dayEnd;
     }).map((ev) => ev.id === matchedInSelected?.id && currentStatus ? {
@@ -678,7 +701,7 @@ export function ICSInvitationCard({
       }
     }
     return filtered;
-  }, [allEvents, icsData, matchedInSelected, selectedCalId, currentStatus, isReply, isCancelled, isCounter, actionSuccess, acceptedCounter]);
+  }, [allEvents, icsData, matchedInSelected, selectedCalId, currentStatus, isReply, isCancelled, isCounter, actionSuccess, acceptedCounter, hasNewSchedule]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -687,6 +710,7 @@ export function ICSInvitationCard({
     setActionError(null);
     setActionSuccess(null);
     setAcceptedCounter(null);
+    setRsvpOverride(undefined);
   }, [sourceKey, selectedCalId]);
 
   const handleRsvp = useCallback(async (status: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE') => {
@@ -709,12 +733,12 @@ export function ICSInvitationCard({
           await queryClient.invalidateQueries({ queryKey: CALENDAR_KEYS.events(selectedCal.id) });
           refreshed = queryClient.getQueryData<CalendarEvent[]>(CALENDAR_KEYS.events(selectedCal.id)) ?? [];
         }
-        event = matchEvent(icsData.title, icsData.start, icsData.end,
+        event = matchEvent(icsData,
           refreshed.filter(candidate => candidate.calendarId === selectedCal.id));
       }
       if (!event) throw new Error(t('invitation.notInCalendar'));
       await executeRsvp(selectedCal, event, status, getGoogleToken, getExchangeToken);
-      saveStoredRsvp(icsData, status);
+      saveStoredRsvp(icsData, selectedCal.id, status);
       // Patch the IndexedDB cache so the calendar view reflects the change
       const { id: eventId, calendarId } = event;
       if (selectedCal.type === 'exchange') {
