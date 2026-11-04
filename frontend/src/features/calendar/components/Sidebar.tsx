@@ -55,6 +55,9 @@ interface Props {
   readonly onRemoveTag?: (id: string) => void;
   readonly events?: CalendarEvent[];
   readonly eventTags?: EventTagMapping;
+  readonly highlightingTag?: string | null;
+  readonly highlightedTagId?: string | null;
+  readonly onHighlightTag?: (tagId: string | null) => void;
   readonly viewRange?: { start: Date; end: Date };
   readonly loading: boolean;
   readonly errors: Record<string, string>;
@@ -364,7 +367,7 @@ export default function Sidebar({
   onToggle, onUpdate, onReorderCalendars,
   onAddGroup, onUpdateGroup, onRemoveGroup,
   onAddTag, onUpdateTag, onRemoveTag,
-  events, eventTags, viewRange,
+  events, eventTags, viewRange, highlightedTagId, onHighlightTag, highlightingTag,
   loading, errors, width, currentDate, onNavigateToDate,
 }: Props) {
   const { t } = useTranslation();
@@ -575,6 +578,9 @@ export default function Sidebar({
               calendars={calendars}
               groups={groups}
               viewRange={viewRange}
+              highlightingTag={highlightingTag}
+              highlightedTagId={highlightedTagId}
+              onHighlightTag={onHighlightTag}
             />
           )}
 

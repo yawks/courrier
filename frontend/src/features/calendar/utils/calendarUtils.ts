@@ -2,6 +2,8 @@ import { isFreeEvent } from './eventOptions';
 import { CalendarConfig, CalendarEvent, ViewType, Tag, EventTagMapping } from '../../../shared/types';
 import { canEditCalDavTask } from './caldavTaskApi';
 
+export const UNTAGGED_HIGHLIGHT = '__untagged__';
+
 export function escapeCalendarText(text: string): string {
   return text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 }
@@ -217,13 +219,13 @@ export const DARK_THEME = {
 };
 
 // ── Map our events to TUI format with styling ─────────────────────────────────
-export function toTUIEvents(events: CalendarEvent[], calendars: CalendarConfig[], isDark: boolean, tags: Tag[], eventTags: EventTagMapping) {
+export function toTUIEvents(events: CalendarEvent[], calendars: CalendarConfig[], isDark: boolean, tags: Tag[], eventTags: EventTagMapping, highlightedTagId: string | null = null) {
   const now = new Date();
   const unacceptedBg = isDark ? '#1e1e2e' : '#ffffff';
   return events.map((ev) => {
     const cal = calendars.find((c) => c.id === ev.calendarId);
     const color = cal?.color || '#888';
-    const eventKey = ev.seriesId || ev.sourceId;
+    const eventKey = ev.seriesId || ev.sourceId || ev.id;
     // Newly-created optimistic events do not have a provider/series ID yet.
     // Keep using the tag carried by the event until the server ID is available
     // and the persistent mapping takes over.
@@ -276,6 +278,12 @@ export function toTUIEvents(events: CalendarEvent[], calendars: CalendarConfig[]
       // example when the event carries duration segments). Paint the container
       // itself so the tentative pattern always covers the complete event.
       customStyle.backgroundImage = `repeating-linear-gradient(-45deg, ${hatchColor} 0, ${hatchColor} 4px, transparent 4px, transparent 8px)`;
+    }
+
+    if (highlightedTagId) {
+      const matches = !cal?.shared && (highlightedTagId === UNTAGGED_HIGHLIGHT ? !tagId : tagId === highlightedTagId);
+      if (matches) customStyle.boxShadow = 'inset 0 0 0 2px var(--primary)';
+      else customStyle.opacity = String(Number(customStyle.opacity ?? 1) * 0.25);
     }
 
     const tagColor = tag ? tag.color : undefined;

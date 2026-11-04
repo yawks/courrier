@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CalendarConfig, CalendarEvent, Tag } from '../../../shared/types';
-import { escapeCalendarText, getEventColorStyle, toTUIEvents } from './calendarUtils';
+import { UNTAGGED_HIGHLIGHT, escapeCalendarText, getEventColorStyle, toTUIEvents } from './calendarUtils';
 
 it('escapes remote titles before inserting them into calendar HTML templates', () => {
   expect(escapeCalendarText('<img src=x onerror="alert(1)"> & \'task\''))
@@ -141,4 +141,37 @@ it('never displays a tag on a read-only shared copy of the same series', () => {
   const [result] = toTUIEvents([{ ...event, seriesId: 'same-series', tagId: tag.id }], [shared], false, [tag], { 'same-series': tag.id });
   expect(result.raw.tagColor).toBeUndefined();
   expect(result.isReadOnly).toBe(true);
+});
+
+it.each(['google', 'exchange', 'nextcloud', 'ics'] as const)('highlights %s series and all-day events by tag, preserves status styles and restores the original render', type => {
+  const cal = { ...calendar, type };
+  const original = [
+    { ...event, id: 'instance', seriesId: 'series', tagId: undefined },
+    { ...event, id: 'all-day', isAllday: true, start: '2099-01-01', end: '2099-01-02' },
+    { ...event, id: 'past-pending', tagId: undefined, isUnaccepted: true, isDeclined: true, start: '2020-01-01T10:00:00Z', end: '2020-01-01T11:00:00Z' },
+  ];
+  const before = toTUIEvents(original, [cal], true, [tag], { series: tag.id });
+  const highlighted = toTUIEvents(original, [cal], true, [tag], { series: tag.id }, tag.id);
+  expect(highlighted[0].customStyle.boxShadow).toContain('var(--primary)');
+  expect(highlighted[1].customStyle.boxShadow).toContain('var(--primary)');
+  expect(Number(highlighted[2].customStyle.opacity)).toBeCloseTo(Number(before[2].customStyle.opacity) * .25);
+  expect(highlighted[2].customStyle.textDecoration).toBe('line-through');
+  expect(highlighted[2].customStyle.outline).toBe(before[2].customStyle.outline);
+  expect(highlighted.map(event => event.id)).toEqual(before.map(event => event.id));
+  expect(toTUIEvents(original, [cal], true, [tag], { series: tag.id }, null)).toEqual(before);
+});
+
+it('never highlights a shared-calendar copy even if it carries the selected tag', () => {
+  const [result] = toTUIEvents([event], [{ ...calendar, shared: { ownerEmail: 'other@example.test' } }], false, [tag], {}, tag.id);
+  expect(result.customStyle.opacity).toBe('0.25');
+  expect(result.customStyle.boxShadow).toBeUndefined();
+});
+
+it('highlights only untagged personal events and restores their normal appearance', () => {
+  const untagged = { ...event, id: 'untagged', tagId: undefined };
+  const shared = { ...calendar, id: 'shared', shared: { ownerEmail: 'other@example.test' } };
+  const results = toTUIEvents([event, untagged, { ...untagged, id: 'copy', calendarId: 'shared' }], [calendar, shared], false, [tag], {}, UNTAGGED_HIGHLIGHT);
+  expect(results[0].customStyle.opacity).toBe('0.25');
+  expect(results[1].customStyle.boxShadow).toContain('var(--primary)');
+  expect(results[2].customStyle.opacity).toBe('0.25');
 });

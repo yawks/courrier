@@ -7,6 +7,8 @@ Account credentials are not persisted on the server. They are stored in an Index
 Calendar groups, their organization, tags, and event–tag associations are stored in the encrypted local vault. They are included when uploading and restoring WebDAV/Nextcloud configuration, making them available on other devices. Existing local data is migrated automatically; after making changes, upload the configuration to update the remote copy.
 
 
+Click a tag in the calendar sidebar’s time statistics to highlight its events and dim the others. Click it again to restore the normal view, or select another tag to switch the highlight.
+
 ## Event availability and privacy
 
 When creating or editing an event, each guest has a **Required / Optional** button to change their participation role. Google Calendar, Exchange/EWS, and CalDAV/Nextcloud save this role and display it in event details. ICS subscriptions display received roles read-only; IMAP/SMTP and JMAP do not provide calendars in Courrier.

@@ -186,6 +186,11 @@
     "statistics": "Statistiques"
   },
   "insights": {
+    "highlightUntagged": "Mettre en évidence les évènements sans tag",
+    "clearUntaggedHighlight": "Retirer la mise en évidence des évènements sans tag",
+    "updatingHighlight": "Mise à jour de la mise en évidence…",
+    "highlightTag": "Mettre en évidence les évènements du tag {{tag}}",
+    "clearHighlight": "Retirer la mise en évidence du tag {{tag}}",
     "allGroups": "Tous les groupes",
     "allCalendars": "Tous les calendriers",
     "eventCount_one": "{{count}} événement",

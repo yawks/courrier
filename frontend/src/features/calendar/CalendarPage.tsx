@@ -18,7 +18,7 @@ import { canEditCalDavTask } from './utils/caldavTaskApi';
 import RecurringChoiceModal from './components/RecurringChoiceModal';
 import Sidebar from './components/Sidebar';
 import { useCalendarLogic } from './hooks/useCalendarLogic';
-import { formatDateLabel, DARK_THEME, LIGHT_THEME, toTUIEvents, escapeCalendarText, getViewRange, formatTime } from './utils/calendarUtils';
+import { UNTAGGED_HIGHLIGHT, formatDateLabel, DARK_THEME, LIGHT_THEME, toTUIEvents, escapeCalendarText, getViewRange, formatTime } from './utils/calendarUtils';
 
 import { isCalendarWritable } from './utils/sharedCalendars';
 
@@ -30,6 +30,9 @@ export default function CalendarPage() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<CalendarEvent | null>(null);
+  const [highlightingTag, setHighlightingTag] = useState<string | null>(null);
+  const highlightBusy = useRef(false);
+  const [highlightedTagId, setHighlightedTagId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [calendarTransition, setCalendarTransition] = useState<'previous' | 'next' | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -170,9 +173,26 @@ export default function CalendarPage() {
     });
   };
 
+  const activeHighlightedTagId = (highlightedTagId === UNTAGGED_HIGHLIGHT || tags.some(tag => tag.id === highlightedTagId)) ? highlightedTagId : null;
+  const handleHighlightTag = useCallback(async (tagId: string | null) => {
+    if (highlightBusy.current) return;
+    highlightBusy.current = true;
+    flushSync(() => setHighlightingTag(tagId));
+    const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    try {
+      // Let the busy indicator paint before Toast UI updates all visible events.
+      await nextFrame();
+      await nextFrame();
+      flushSync(() => setHighlightedTagId(current => current === tagId ? null : tagId));
+      await nextFrame();
+    } finally {
+      highlightBusy.current = false;
+      setHighlightingTag(null);
+    }
+  }, []);
   const tuiEvents = useMemo(() =>
-    toTUIEvents(visibleEvents, calendars, theme === 'dark', tags, eventTags),
-    [visibleEvents, calendars, theme, tags, eventTags]
+    toTUIEvents(visibleEvents, calendars, theme === 'dark', tags, eventTags, activeHighlightedTagId),
+    [visibleEvents, calendars, theme, tags, eventTags, activeHighlightedTagId]
   );
 
   const tuiCalendars = useMemo(() => calendars
@@ -343,6 +363,9 @@ export default function CalendarPage() {
             onRemoveTag={removeTag}
             events={events}
             eventTags={eventTags}
+            highlightingTag={highlightingTag}
+            highlightedTagId={activeHighlightedTagId}
+            onHighlightTag={handleHighlightTag}
             viewRange={getViewRange(currentDate, view)}
             loading={loading}
             errors={errors}

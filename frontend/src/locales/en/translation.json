@@ -186,6 +186,11 @@
     "statistics": "Statistics"
   },
   "insights": {
+    "highlightUntagged": "Highlight events without tags",
+    "clearUntaggedHighlight": "Clear highlighting for events without tags",
+    "updatingHighlight": "Updating highlighted events…",
+    "highlightTag": "Highlight events tagged {{tag}}",
+    "clearHighlight": "Clear highlighting for {{tag}}",
     "allGroups": "All groups",
     "allCalendars": "All calendars",
     "eventCount_one": "{{count}} event",

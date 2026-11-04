@@ -824,6 +824,56 @@
 .calendar-edit-cancel { background: var(--bg-hover); color: var(--text); }
 .calendar-edit-cancel:hover { background: var(--border); }
 
+.insights-stat {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 3px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+.insights-stat--interactive { min-height: 30px; cursor: pointer; }
+.insights-stat--interactive:disabled { cursor: progress; }
+.insights-stat--interactive { position: relative; }
+.insights-stat__loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  color: var(--primary);
+  pointer-events: none;
+}
+@media (pointer: coarse) {
+  .insights-stat--interactive { min-height: 44px; }
+}
+.insights-stat--interactive:hover { background: var(--bg-hover); }
+.insights-stat--interactive[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg));
+}
+.insights-stat--interactive:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+.insights-stat__header { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.insights-stat__dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.insights-stat__label { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: calc(12px * var(--font-scale, 1)); }
+.insights-stat__duration { flex-shrink: 0; color: var(--text-muted); font-size: calc(11px * var(--font-scale, 1)); }
+.insights-stat__track { display: block; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.insights-stat__bar { display: block; height: 100%; border-radius: 2px; opacity: .85; transition: width .3s ease; }
+.insights-stat--muted { color: var(--text-muted); }
+.insights-stat--muted .insights-stat__dot { opacity: .5; }
+.insights-stat--muted .insights-stat__bar { opacity: .4; }
+
 .insights-select {
   width: 100%;
   font-size: calc(11px * var(--font-scale, 1));
