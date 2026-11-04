@@ -579,7 +579,6 @@
   cursor: grabbing;
 }
 
-/* ── Add group button ────────────────────────────── */
 .add-group-btn {
   display: flex;
   align-items: center;
@@ -601,24 +600,79 @@
 .sidebar:hover .add-group-btn { opacity: 1; }
 .add-group-btn:hover { background: var(--bg-hover); color: var(--text); }
 
-.add-group-input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  margin-top: 4px;
+/* ── Compact calendar actions ────────────────────── */
+.calendar-sidebar-actions__trigger.btn-ghost {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 8px;
 }
+.calendar-sidebar-actions__trigger svg { flex-shrink: 0; }
 
-.add-group-input {
-  flex: 1;
-  padding: 3px 6px;
-  border: 1px solid var(--primary);
-  border-radius: 4px;
+.calendar-sidebar-actions__popover {
+  position: fixed;
+  z-index: 1100;
+  display: grid;
+  gap: 2px;
+  width: min(280px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: var(--bg);
   color: var(--text);
-  font-size: calc(12px * var(--font-scale, 1));
-  outline: none;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.calendar-sidebar-actions__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(13px * var(--font-scale, 1));
+  text-align: start;
+  cursor: pointer;
+}
+.calendar-sidebar-actions__item svg { flex-shrink: 0; }
+.calendar-sidebar-actions__item span { min-width: 0; overflow-wrap: anywhere; }
+.calendar-sidebar-actions__item:hover { background: var(--bg-hover); }
+.calendar-sidebar-actions__trigger:focus-visible,
+.calendar-sidebar-actions__popover :is(button, input):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+.calendar-sidebar-actions__form { display: grid; gap: 12px; padding: 8px; margin: 0; }
+.calendar-sidebar-actions__field { display: grid; gap: 8px; min-width: 0; font-size: calc(13px * var(--font-scale, 1)); }
+.calendar-sidebar-actions__field input {
   min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.calendar-sidebar-actions__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.calendar-sidebar-actions__buttons button { min-height: 44px; }
+@media (pointer: coarse), (max-width: 600px) {
+  .calendar-sidebar-actions__trigger.btn-ghost { width: 44px; height: 44px; }
 }
 
 .calendar-item-wrapper {
@@ -1645,7 +1699,7 @@
 .shared-calendar-help { margin: 0; font-size: calc(12px * var(--font-scale, 1)); color: var(--text-muted); line-height: 1.45; overflow-wrap: anywhere; }
 .shared-calendar-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: calc(13px * var(--font-scale, 1)); }
 .shared-calendar-field input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 44px; border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text); background: var(--bg); font: inherit; }
-.shared-calendar-dialog :is(input, button):focus-visible, .shared-calendar-item :is(input, button):focus-visible, .shared-calendar-add:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 20%, transparent); }
+.shared-calendar-dialog :is(input, button):focus-visible, .shared-calendar-item :is(input, button):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 20%, transparent); }
 .shared-calendar-suggestions { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
 .shared-calendar-suggestion { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; text-align: start; color: var(--text); background: var(--bg); font: inherit; cursor: pointer; }
 .shared-calendar-suggestion[aria-selected="true"], .shared-calendar-suggestion:hover { background: var(--bg-hover); border-color: var(--primary); }
@@ -1667,7 +1721,6 @@
 .shared-calendar-error { color: var(--danger); line-height: 1.45; }
 .shared-calendar-spinner { color: var(--primary); animation: shared-calendar-spin 1s linear infinite; }
 @keyframes shared-calendar-spin { to { transform: rotate(360deg); } }
-.shared-calendar-add { min-height: 44px; white-space: normal; text-align: start; }
 .shared-calendar-item .calendar-edit-btn { opacity: 1; min-width: 44px; min-height: 44px; }
 .shared-calendar-item .shared-calendar-remove { color: var(--danger); }
 .shared-calendar-item .calendar-item { min-width: 0; }

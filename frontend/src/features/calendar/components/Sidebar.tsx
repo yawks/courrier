@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Settings, AlertCircle, Loader2, Pencil, Check, X,
   GripVertical, ChevronRight, Plus, Trash2,
@@ -27,7 +27,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 import { CalendarConfig, CalendarGroup, Tag, CalendarEvent, EventTagMapping } from '../../../shared/types';
-import SharedCalendarModal from './SharedCalendarModal';
+import SidebarCalendarActions from './SidebarCalendarActions';
 import { useCalendars } from '../store/CalendarStore';
 import { calendarGroupId, OTHER_CALENDARS_GROUP } from '../utils/sharedCalendars';
 import MiniCalendar from './MiniCalendar';
@@ -208,13 +208,14 @@ function CalendarDragPreview({ cal }: { cal: CalendarConfig }) {
 // ── Group header ──────────────────────────────────────────────────────────────
 
 interface GroupHeaderProps {
+  actions?: ReactNode;
   group: CalendarGroup;
   isEmpty: boolean;
   onUpdate: (id: string, data: Partial<CalendarGroup>) => void;
   onRemove: (id: string) => void;
 }
 
-function GroupHeader({ group, isEmpty, onUpdate, onRemove }: GroupHeaderProps) {
+function GroupHeader({ group, isEmpty, onUpdate, onRemove, actions }: GroupHeaderProps) {
   const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(group.name);
@@ -260,6 +261,7 @@ function GroupHeader({ group, isEmpty, onUpdate, onRemove }: GroupHeaderProps) {
         <span className="group-name">{group.id === OTHER_CALENDARS_GROUP ? t('sharedCalendars.group') : group.name}</span>
       )}
 
+      {actions}
       <div className="group-header-actions">
         {!isEditing && group.id !== OTHER_CALENDARS_GROUP && (
           <button
@@ -289,6 +291,7 @@ function GroupHeader({ group, isEmpty, onUpdate, onRemove }: GroupHeaderProps) {
 // ── Group section (droppable) ─────────────────────────────────────────────────
 
 interface GroupSectionProps {
+  actions?: ReactNode;
   group: CalendarGroup;
   groupCalendars: CalendarConfig[];
   editingId: string | null;
@@ -306,7 +309,7 @@ interface GroupSectionProps {
 }
 
 function GroupSection({
-  group, groupCalendars,
+  group, groupCalendars, actions,
   editingId, editName, editColor,
   onStartEdit, onSaveEdit, onCancelEdit,
   onEditNameChange, onEditColorChange,
@@ -319,6 +322,7 @@ function GroupSection({
     <div className={`group-section${group.id === OTHER_CALENDARS_GROUP ? ' shared-calendar-group' : ''}`}>
       <GroupHeader
         group={group}
+        actions={actions}
         isEmpty={groupCalendars.length === 0}
         onUpdate={onUpdateGroup}
         onRemove={onRemoveGroup}
@@ -365,16 +369,11 @@ export default function Sidebar({
 }: Props) {
   const { t } = useTranslation();
 
-  const [sharedModalOpen, setSharedModalOpen] = useState(false);
 
   // Calendar edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
-
-  // New group form state
-  const [addingGroup, setAddingGroup] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
 
   // Tags/Insights toggle
   const [tagsView, setTagsView] = useState<'tags' | 'insights'>(
@@ -415,13 +414,6 @@ export default function Sidebar({
   };
 
   const cancelEdit = () => setEditingId(null);
-
-  const handleAddGroup = () => {
-    const name = newGroupName.trim();
-    if (name) onAddGroup(name);
-    setNewGroupName('');
-    setAddingGroup(false);
-  };
 
   const startEditTag = (tag: Tag) => {
     setEditingTagId(tag.id);
@@ -505,10 +497,11 @@ export default function Sidebar({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        {groups.map((group) => (
+        {groups.filter(group => group.id !== OTHER_CALENDARS_GROUP || getGroupCalendars(group.id).length > 0).map((group) => (
           <GroupSection
             key={group.id}
             group={group}
+            actions={group.id === 'default' ? <SidebarCalendarActions onAddGroup={onAddGroup} /> : undefined}
             groupCalendars={getGroupCalendars(group.id)}
             editingId={editingId}
             editName={editName}
@@ -529,41 +522,6 @@ export default function Sidebar({
           {activeCal ? <CalendarDragPreview cal={activeCal} /> : null}
         </DragOverlay>
       </DndContext>
-
-      <button type="button" className="add-group-btn shared-calendar-add" onClick={() => setSharedModalOpen(true)}><Plus size={16} />{t('sharedCalendars.add')}</button>
-      {sharedModalOpen && <SharedCalendarModal onClose={() => setSharedModalOpen(false)} />}
-
-      {addingGroup ? (
-        <div className="add-group-input-row">
-          <input
-            className="add-group-input"
-            value={newGroupName}
-            onChange={(e) => setNewGroupName(e.target.value)}
-            placeholder={t('sidebar.groupNamePlaceholder')}
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleAddGroup();
-              if (e.key === 'Escape') { setNewGroupName(''); setAddingGroup(false); }
-            }}
-            onBlur={() => { if (!newGroupName.trim()) setAddingGroup(false); }}
-          />
-          <button type="button" className="calendar-edit-save" onClick={handleAddGroup} title={t('sidebar.save')}>
-            <Check size={13} />
-          </button>
-          <button type="button" className="calendar-edit-cancel" onClick={() => { setNewGroupName(''); setAddingGroup(false); }} title={t('sidebar.cancel')}>
-            <X size={13} />
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="add-group-btn"
-          onClick={() => setAddingGroup(true)}
-        >
-          <Plus size={12} />
-          {t('sidebar.newGroup')}
-        </button>
-      )}
 
       {tags !== undefined && (
         <div className="group-section" style={{ marginTop: '16px' }}>

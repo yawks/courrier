@@ -164,6 +164,7 @@
     "attendeeCount_plural": "{{count}} invités"
   },
   "sidebar": {
+    "calendarActions": "Ajouter un calendrier ou un groupe",
     "myCalendars": "Mes calendriers",
     "noCalendars": "Aucun calendrier configuré",
     "customColor": "Couleur personnalisée",

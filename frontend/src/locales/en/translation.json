@@ -164,6 +164,7 @@
     "attendeeCount_plural": "{{count}} attendees"
   },
   "sidebar": {
+    "calendarActions": "Add a calendar or group",
     "myCalendars": "My calendars",
     "noCalendars": "No calendars configured",
     "customColor": "Custom color",
