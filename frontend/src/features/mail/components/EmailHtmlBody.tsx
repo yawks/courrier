@@ -15,6 +15,28 @@ function parseHexColor(raw: string): [number, number, number] | null {
   return m ? [Number.parseInt(m[1], 16), Number.parseInt(m[2], 16), Number.parseInt(m[3], 16)] : null;
 }
 
+function installEmailLinkHandler(doc: Document): () => void {
+  const openLink = (event: Event) => {
+    if (event.type === 'keydown' && (event as KeyboardEvent).key !== 'Enter') return;
+    if (event.type === 'click' && (event as MouseEvent).button !== 0) return;
+    // Nodes belong to the iframe realm, so instanceof Element from the parent
+    // window would reject them. Delegation also survives restored message HTML.
+    const target = event.target as Node | null;
+    const element = target?.nodeType === 1 ? target as Element : target?.parentElement;
+    const anchor = element?.closest<HTMLAnchorElement>('a[href]');
+    if (!anchor) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openExternalUrl(anchor.href);
+  };
+  doc.addEventListener('click', openLink, true);
+  doc.addEventListener('keydown', openLink, true);
+  return () => {
+    doc.removeEventListener('click', openLink, true);
+    doc.removeEventListener('keydown', openLink, true);
+  };
+}
+
 function sanitizeEmailHtml(html: string, isDark: boolean): string {
   const parsed = new DOMParser().parseFromString(html, 'text/html');
   parsed.querySelectorAll('script, iframe, frame, object, embed, base, meta[http-equiv="refresh"]').forEach(element => element.remove());
@@ -54,6 +76,7 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
   const isDark = resolved === 'dark';
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const pinchCleanupRef = useRef<(() => void) | null>(null);
+  const linkCleanupRef = useRef<(() => void) | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const bgRaw = getComputedStyle(document.documentElement).getPropertyValue('--bg');
@@ -64,6 +87,7 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
   useEffect(() => () => {
     resizeObserverRef.current?.disconnect();
     pinchCleanupRef.current?.();
+    linkCleanupRef.current?.();
   }, []);
 
   const kr = ((255 + bgR) / 255).toFixed(4);
@@ -136,6 +160,9 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
     const doc = frame?.contentDocument;
     if (!frame || !doc?.body || !doc.documentElement) return;
 
+    // Install before optional layout/quote processing can fail.
+    linkCleanupRef.current?.();
+    linkCleanupRef.current = installEmailLinkHandler(doc);
     const root = doc.querySelector<HTMLElement>('.ew') ?? doc.body;
     // Quote recognition is an enhancement: malformed or unusually nested
     // sender HTML must never prevent the iframe from being measured/revealed.
@@ -241,25 +268,6 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
     observer.observe(root);
     resizeObserverRef.current = observer;
     doc.addEventListener('load', () => resize(), true);
-    doc.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
-      const href = anchor.href;
-      if (!href || href.startsWith('javascript:')) {
-        anchor.removeAttribute('href');
-        return;
-      }
-      anchor.removeAttribute('href');
-      anchor.setAttribute('role', 'link');
-      anchor.tabIndex = 0;
-      const openLink = (event: Event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        openExternalUrl(href);
-      };
-      anchor.addEventListener('click', openLink, true);
-      anchor.addEventListener('keydown', event => {
-        if (event.key === 'Enter') openLink(event);
-      }, true);
-    });
     if (platform.isNativeAndroid) {
       // Android may finish its width-constraining layout on the next frame.
       // Keep the frame hidden until that final layout has been measured.
@@ -322,6 +330,8 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
       const doc = frame?.contentDocument;
       if (!frame || !doc?.body || !doc.documentElement || frame.style.visibility === 'visible') return;
 
+      linkCleanupRef.current?.();
+      linkCleanupRef.current = installEmailLinkHandler(doc);
       const root = doc.querySelector<HTMLElement>('.ew') ?? doc.body;
       // The failed load handler may have stopped after partially folding or
       // restyling the document. Restore the sanitized source before revealing

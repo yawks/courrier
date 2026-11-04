@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useMailContentRules } from '../../../shared/store/MailContentRulesStore';
 import { processEmailQuotes } from '../utils/emailQuoteParser';
+import { openExternalUrl } from '../../../shared/services/fileService';
 import { forwardedGmailOutlookHtml, forwardedGmailOutlookText } from './__fixtures__/forwardedGmailOutlookMessage';
 
 vi.mock('../../../shared/store/MailContentRulesStore', () => ({ useMailContentRules: vi.fn(() => ({ rules: [], save: vi.fn() })) }));
@@ -29,8 +30,59 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
   vi.mocked(useMailContentRules).mockReturnValue({ rules: [], save: vi.fn() });
   document.body.replaceChildren();
+});
+
+describe('EmailHtmlBody links', () => {
+  it.each([false, true])('opens links after fallback restores the DOM (load handler ran: %s)', async loaded => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const component = createRoot(host);
+    const html = '<p><a href="https://example.com/unsubscribe"><span>Unsubscribe</span></a></p>';
+    await act(async () => component.render(<EmailHtmlBody html={html} />));
+    const frame = host.querySelector('iframe')!;
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = `<div class="ew">${html}</div>`;
+    if (loaded) await act(async () => frame.dispatchEvent(new Event('load')));
+    frame.style.visibility = 'hidden';
+    await act(async () => vi.advanceTimersByTime(500));
+    expect(frame.style.visibility).toBe('visible');
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    doc.querySelector('a span')!.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(openExternalUrl).toHaveBeenCalledTimes(1);
+    expect(openExternalUrl).toHaveBeenCalledWith('https://example.com/unsubscribe');
+    await act(async () => component.unmount());
+  });
+
+  it('keeps small unsubscribe links native and opens nested clicks and Enter externally without navigating the iframe', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const component = createRoot(host);
+    const html = '<p><a href="https://example.com/unsubscribe?token=test" style="font-size:8px"><span>Se désinscrire</span></a></p>';
+    await act(async () => component.render(<EmailHtmlBody html={html} />));
+    const frame = host.querySelector('iframe')!;
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = `<div class="ew">${html}</div>`;
+    await act(async () => frame.dispatchEvent(new Event('load')));
+    const anchor = doc.querySelector('a')!;
+    expect(anchor.getAttribute('href')).toBe('https://example.com/unsubscribe?token=test');
+    expect(anchor.tabIndex).toBe(0);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    anchor.querySelector('span')!.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(openExternalUrl).toHaveBeenCalledTimes(1);
+    expect(openExternalUrl).toHaveBeenCalledWith(anchor.href);
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    anchor.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(openExternalUrl).toHaveBeenCalledTimes(2);
+    await act(async () => component.unmount());
+  });
 });
 
 describe('EmailHtmlBody regression: forwarded Gmail/Outlook message', () => {
