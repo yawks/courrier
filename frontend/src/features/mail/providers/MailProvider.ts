@@ -45,6 +45,9 @@ export interface SendMailParams {
   bodyHtml: string;
   replyToItemId?: string | null;
   replyToChangeKey?: string | null;
+  /** Stable conversation and RFC Message-ID used to refresh movable item references. */
+  conversationId?: string;
+  replyMessageId?: string;
   isForward?: boolean;
   attachments?: ComposerAttachment[];
   fromIdentityId?: string;

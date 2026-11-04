@@ -2418,6 +2418,7 @@ fn thread_header_shape() -> &'static str {
       <t:FieldURI FieldURI="message:ToRecipients"/>
       <t:FieldURI FieldURI="message:CcRecipients"/>
       <t:FieldURI FieldURI="message:IsRead"/>
+      <t:FieldURI FieldURI="message:InternetMessageId"/>
     </t:AdditionalProperties>"#
 }
 
@@ -2778,7 +2779,7 @@ fn parse_message(msg_xml: &str) -> Option<MailMessage> {
         ics_mime,
         is_draft,
         body_text,
-        message_id: None,
+        message_id: xml_content_ns(msg_xml, "t:InternetMessageId").map(|id| xml_unescape_body(&id)),
         references: None,
     })
 }
@@ -3357,6 +3358,19 @@ mod outlook_schedule_tests {
             "<m:ResponseCode>NoError</m:ResponseCode>",
             false
         ));
+    }
+
+    #[test]
+    fn thread_headers_preserve_stable_message_id_after_move() {
+        assert!(thread_header_shape().contains("message:InternetMessageId"));
+        let xml = r#"<t:Message><t:ItemId Id="moved" ChangeKey="new-key"/>
+            <t:InternetMessageId>&lt;parent@example.com&gt;</t:InternetMessageId></t:Message>"#;
+        let messages = parse_thread_headers(xml, true);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].item_id, "moved");
+        assert_eq!(messages[0].message_id.as_deref(), Some("<parent@example.com>"));
+        assert!(parse_message(r#"<t:Message><t:ItemId Id="legacy"/></t:Message>"#)
+            .unwrap().message_id.is_none());
     }
 
     #[test]

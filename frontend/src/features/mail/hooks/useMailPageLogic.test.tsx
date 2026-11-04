@@ -81,6 +81,39 @@ it('retires the temporary preview after sending and deletes only the server item
   }
 });
 
+it('keeps the exact reply identity when a conversation is moved during undo-send', async () => {
+  vi.useFakeTimers();
+  f.send.mockReset().mockResolvedValue(undefined);
+  f.move.mockReset();
+  const client = new QueryClient();
+  const root = createRoot(document.createElement('div'));
+  let logic!: ReturnType<typeof useMailPageLogic>;
+  function Harness() { logic = useMailPageLogic(); return null; }
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>));
+    await act(async () => logic.setSelectedThread({ conversation_id: 'conversation', accountId: 'account' } as never));
+    await act(async () => logic.scheduleSend(['recipient@example.com'], [], [], 'Reply', '<p>Body</p>', {
+      isNewMessage: false, isForward: true, toRecipients: [], ccRecipients: [], bccRecipients: [],
+      replyingToMsg: { item_id: 'old-parent', change_key: 'old-key', message_id: '<parent@example.com>' },
+    } as unknown as ComposerRestoreData));
+    await act(async () => logic.handleMove('archive-folder'));
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(f.move).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conversation', targetFolderId: 'archive-folder' }), expect.anything());
+    expect(f.send).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.send).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conversation', replyMessageId: '<parent@example.com>',
+      replyToItemId: 'old-parent', isForward: true,
+    }));
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
 it('clears the selected identifier before switching its folder context', async () => {
   const client = new QueryClient();
   const root = createRoot(document.createElement('div'));

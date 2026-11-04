@@ -1419,6 +1419,7 @@ export function useMailPageLogic() {
           inReplyTo, references,
           replyToItemId: replyingToMsg?.item_id,
           replyToChangeKey: replyingToMsg?.change_key,
+          replyMessageId: replyingToMsg?.message_id ?? undefined,
           isForward: restoreData.isForward,
           sendAt,
         });

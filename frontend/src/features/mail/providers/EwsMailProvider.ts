@@ -137,7 +137,19 @@ export class EwsMailProvider implements MailProvider {
     return invoke<MailFolder[]>('mail_list_folders', { accessToken });
   }
 
-  async sendMail({ to, cc, bcc, subject, bodyHtml, replyToItemId, replyToChangeKey, isForward, attachments, sendAt }: SendMailParams): Promise<void> {
+  async sendMail({ to, cc, bcc, subject, bodyHtml, replyToItemId, replyToChangeKey, conversationId, replyMessageId, inReplyTo, isForward, attachments, sendAt }: SendMailParams): Promise<void> {
+    // Moving a message during undo-send changes its EWS ItemId and ChangeKey.
+    // Resolve the exact parent, not the newest message in the conversation.
+    if (replyToItemId && conversationId) {
+      const messages = await this.getThread(conversationId, true);
+      const stableId = replyMessageId ?? inReplyTo;
+      const parent = messages.find(message => message.item_id === replyToItemId)
+        ?? (stableId ? messages.find(message => message.message_id === stableId) : undefined);
+      if (parent) {
+        replyToItemId = parent.item_id;
+        replyToChangeKey = parent.change_key;
+      }
+    }
     const accessToken = await this.token();
     const { html: processedHtml, inlineImages } = extractInlineImages(bodyHtml);
     return invoke('mail_send', {

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mailCommand } = vi.hoisted(() => ({ mailCommand: vi.fn() }));
@@ -8,6 +9,52 @@ import { EwsMailProvider } from './EwsMailProvider';
 
 describe('EwsMailProvider', () => {
   beforeEach(() => mailCommand.mockReset());
+
+  for (const isForward of [false, true]) {
+    for (const attachments of [[], [{ name: 'file.txt', contentType: 'text/plain', size: 4, data: 'dGVzdA==' }]]) {
+      it(`refreshes a moved parent before sending (forward=${isForward}, attachments=${attachments.length})`, async () => {
+        mailCommand.mockImplementation(async (command: string) => {
+          if (command === 'mail_get_thread_headers') return [
+            { item_id: 'other', change_key: 'other-key', message_id: '<other@example.com>' },
+            { item_id: 'moved-parent', change_key: 'new-key', message_id: '<parent@example.com>' },
+          ];
+        });
+        const provider = new EwsMailProvider('account', async () => 'token');
+        await provider.sendMail({
+          to: ['recipient@example.com'], subject: 'Reply', bodyHtml: '<p>Body</p>',
+          conversationId: 'conversation', replyMessageId: '<parent@example.com>',
+          replyToItemId: 'old-parent', replyToChangeKey: 'old-key', isForward, attachments,
+        });
+        expect(mailCommand).toHaveBeenNthCalledWith(1, 'mail_get_thread_headers', expect.objectContaining({
+          conversationId: 'conversation', includeTrash: true,
+        }));
+        expect(mailCommand).toHaveBeenLastCalledWith('mail_send', expect.objectContaining({
+          replyToItemId: 'moved-parent', replyToChangeKey: 'new-key', isForward, attachments,
+        }));
+      });
+    }
+  }
+
+  it('refreshes the change key even if the item has not moved', async () => {
+    mailCommand.mockResolvedValueOnce([{ item_id: 'parent', change_key: 'new-key' }]);
+    const provider = new EwsMailProvider('account', async () => 'token');
+    await provider.sendMail({ to: [], subject: 'Reply', bodyHtml: '', conversationId: 'conversation', replyToItemId: 'parent', replyToChangeKey: 'old-key' });
+    expect(mailCommand).toHaveBeenLastCalledWith('mail_send', expect.objectContaining({ replyToItemId: 'parent', replyToChangeKey: 'new-key' }));
+  });
+
+  it('does not retry a send with an uncertain outcome', async () => {
+    mailCommand.mockRejectedValueOnce(new Error('network timeout'));
+    const provider = new EwsMailProvider('account', async () => 'token');
+    await expect(provider.sendMail({ to: [], subject: 'New', bodyHtml: '' })).rejects.toThrow('network timeout');
+    expect(mailCommand).toHaveBeenCalledOnce();
+  });
+
+  it('does not send when refreshing the reference fails', async () => {
+    mailCommand.mockRejectedValueOnce(new Error('Exchange unavailable'));
+    const provider = new EwsMailProvider('account', async () => 'token');
+    await expect(provider.sendMail({ to: [], subject: 'Reply', bodyHtml: '', conversationId: 'conversation', replyToItemId: 'old-parent' })).rejects.toThrow('Exchange unavailable');
+    expect(mailCommand).not.toHaveBeenCalledWith('mail_send', expect.anything());
+  });
 
   it('moves each Exchange item once even when conversation envelopes repeat it', async () => {
     mailCommand.mockImplementation(async (command: string) => {

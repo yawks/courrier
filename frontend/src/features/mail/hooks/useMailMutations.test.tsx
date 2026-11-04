@@ -16,6 +16,28 @@ vi.mock('./useOfflineMailSync', () => ({ synchronizeOfflineInboxAccount: vi.fn()
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+it.each(['gmail', 'ews', 'imap', 'jmap'] as const)('%s: forwards stable reply identity to the send provider', async providerType => {
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const root = createRoot(document.createElement('div'));
+  let mutations!: ReturnType<typeof useMailMutations>;
+  function Harness() { mutations = useMailMutations(); return null; }
+  const provider = { providerType, sendMail: vi.fn().mockResolvedValue(undefined) } as unknown as MailProvider;
+  const params = {
+    to: ['recipient@example.com'], cc: [], bcc: [], subject: 'Reply', bodyHtml: '<p>Body</p>',
+    conversationId: 'conversation', replyMessageId: '<parent@example.com>',
+    replyToItemId: 'old-parent', replyToChangeKey: 'old-key',
+  };
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>));
+    await act(async () => { await mutations.sendMail({ accountId: 'account', provider, ...params }); });
+    expect(provider.sendMail).toHaveBeenCalledOnce();
+    expect(provider.sendMail).toHaveBeenCalledWith(expect.objectContaining(params));
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+  }
+});
+
 it.each(['gmail', 'ews', 'imap', 'jmap'] as const)('%s: reads each opened message independently, preserving unread siblings and other accounts', async providerType => {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
   const root = createRoot(document.createElement('div'));
