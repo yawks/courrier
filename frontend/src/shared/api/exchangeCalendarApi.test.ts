@@ -6,9 +6,22 @@ vi.mock('./nativeTransport', () => ({ hasNativeTransport: vi.fn(() => false), in
 
 describe('exchangeCalendarApi', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.mocked(hasNativeTransport).mockReturnValue(false);
     vi.mocked(invokeNative).mockReset();
+  });
+
+  it('logs native failures with a request ID and operation, never raw arguments or SOAP details', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(hasNativeTransport).mockReturnValue(true);
+    vi.mocked(invokeNative).mockRejectedValue('EWS calendar GetItem: ErrorItemNotFound private-token private@example.test');
+    await expect(exchangeCalendarApi.list({ accessToken: 'private-token', ownerEmail: 'private@example.test' })).rejects.toThrow('ErrorItemNotFound');
+    expect(error).toHaveBeenCalledWith('[Exchange calendar request]', expect.objectContaining({ requestId: expect.any(Number), operation: 'list', transport: 'native', code: 'ErrorItemNotFound' }));
+    const logged = JSON.stringify([info.mock.calls, error.mock.calls]);
+    expect(logged).not.toContain('private-token');
+    expect(logged).not.toContain('private@example.test');
   });
 
   it('passes participants through the desktop command and retains native error details', async () => {
@@ -26,6 +39,20 @@ describe('exchangeCalendarApi', () => {
   it('maps the generic event identifier returned by EWS', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ itemId: 'item', changeKey: 'change' }), { status: 200 })));
     await expect(exchangeCalendarApi.create({ title: 'Meeting' })).resolves.toBe('item|change');
+  });
+
+  it('reads the saved EWS item through web and native transports without listing the calendar', async () => {
+    const request = { accessToken: 'token', itemId: 'saved', start: '2026-11-10T10:00:00Z', end: '2027-05-01T00:00:00Z', recurring: false };
+    const snapshots = [{ item_id: 'saved', change_key: 'latest' }];
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshots)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(exchangeCalendarApi.get(request)).resolves.toEqual(snapshots);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('/api/calendar/exchange/get', expect.objectContaining({ method: 'POST', body: JSON.stringify(request) }));
+    vi.mocked(hasNativeTransport).mockReturnValue(true);
+    vi.mocked(invokeNative).mockResolvedValue(snapshots);
+    await expect(exchangeCalendarApi.get(request)).resolves.toEqual(snapshots);
+    expect(invokeNative).toHaveBeenCalledWith('exchange_calendar_get', request);
   });
 
   it('discovers rooms through the web endpoint and the shared native command', async () => {

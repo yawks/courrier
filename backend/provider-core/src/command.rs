@@ -412,6 +412,7 @@ struct ExchangeCreate {
     location: Option<String>,
     description: Option<String>,
     attendees: Option<Vec<String>>,
+    optional_attendees: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -419,6 +420,7 @@ struct ExchangeUpdate {
     sensitivity: Option<String>,
     availability: Option<String>,
     attendees: Option<Vec<String>>,
+    optional_attendees: Option<Vec<String>>,
     original_start: Option<String>,
     recurrence: Option<String>,
     access_token: String,
@@ -551,6 +553,10 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
             let a: crate::caldav::Query = args(value)?;
             output(crate::caldav::query(a).await)
         }
+        "exchange_calendar_get" => {
+            let a: crate::ews::CalendarItemRequest = args(value)?;
+            output(crate::ews::ews_get_calendar_item(a).await)
+        }
         "exchange_calendar_list" => {
             let a: ExchangeList = args(value)?;
             output(
@@ -575,6 +581,7 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
                     a.refresh_token,
                     a.sensitivity,
                     a.availability,
+                    a.optional_attendees,
                 )
                 .await,
             )
@@ -598,6 +605,7 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
                     a.attendees,
                     a.sensitivity,
                     a.availability,
+                    a.optional_attendees,
                 )
                 .await,
             )

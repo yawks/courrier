@@ -55,7 +55,7 @@ pub async fn ews_get_calendar_events(
                 }
                 return Err(shared_calendar_read_error(&xml, folder_id.as_deref(), &error));
             }
-            return Err(error);
+            return Err(calendar_read_error("FindItem", &xml));
         }
     };
 
@@ -68,11 +68,7 @@ pub async fn ews_get_calendar_events(
 
     // EWS supports up to 100 items per GetItem request — process in chunks.
     for chunk in all_ids.chunks(100) {
-        let item_ids_xml: String = chunk
-            .iter()
-            .map(|(id, ck)| format!(r#"<t:ItemId Id="{}" ChangeKey="{}"/>"#, id, ck))
-            .collect::<Vec<_>>()
-            .join("\n    ");
+        let item_ids_xml = calendar_get_item_ids(chunk);
 
         let get_body = format!(
             r#"<m:GetItem>
@@ -90,7 +86,13 @@ pub async fn ews_get_calendar_events(
             item_ids_xml
         );
 
-        if let Ok(details_xml) = send_ews_request(&access_token, &get_body, anchor_mailbox).await {
+        {
+            let details_xml = send_ews_request(&access_token, &get_body, anchor_mailbox).await?;
+            let (details_xml, missing) = calendar_detail_responses(&details_xml, chunk)?;
+            if !missing.is_empty() {
+                eprintln!("[EWS calendar] GetItem missing_items={} requested={} (no retry)", missing.len(), chunk.len());
+                events.retain(|event| !missing.contains(&event.item_id));
+            }
             refresh_event_snapshots(&mut events, &details_xml)?;
             let mut detailed = parse_get_item_response(&details_xml);
             for detail in detailed.iter_mut() {
@@ -136,7 +138,10 @@ pub async fn ews_get_calendar_events(
                         event.recurring_master_id = detail.clean_global_object_id.clone();
                     }
                     event.body = detail.body.clone();
-                    if event.is_meeting {
+                    if event.is_meeting || !detail.attendees.is_empty() {
+                        // Explicit participant lists are authoritative even when a snapshot
+                        // omits IsMeeting (including meetings with only optional guests).
+                        event.is_meeting = true;
                         event.attendees = detail.attendees.clone();
                         if event.organizer_email.is_none() {
                             event.organizer_email = detail.organizer_email.clone();
@@ -149,6 +154,194 @@ pub async fn ews_get_calendar_events(
     }
 
     Ok(events)
+}
+
+/// Read only a newly saved item, or its occurrences, without scanning the calendar.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarItemRequest {
+    pub access_token: String,
+    pub item_id: String,
+    pub owner_email: Option<String>,
+    #[serde(default)]
+    pub recurring: bool,
+    pub start: String,
+    pub end: String,
+}
+
+fn calendar_item_read_body(request: &CalendarItemRequest) -> Result<String, String> {
+    if request.item_id.trim().is_empty() { return Err("Invalid EWS item ID".into()); }
+    let reference = if request.recurring {
+        let start = chrono::DateTime::parse_from_rfc3339(&request.start).map_err(|_| "Invalid EWS range")?;
+        let end = chrono::DateTime::parse_from_rfc3339(&request.end).map_err(|_| "Invalid EWS range")?;
+        if end <= start { return Err("Invalid EWS range".into()); }
+        format!(r#"<t:RecurringMasterItemIdRanges Id="{}"><t:Ranges><t:Range Start="{}" End="{}" Count="500" CompareOriginalStartTime="false"/></t:Ranges></t:RecurringMasterItemIdRanges>"#,
+            xml_escape(&request.item_id), xml_escape(&request.start), xml_escape(&request.end))
+    } else {
+        calendar_get_item_ids(&[(request.item_id.clone(), String::new())])
+    };
+    Ok(format!(r#"<m:GetItem><m:ItemShape><t:BaseShape>AllProperties</t:BaseShape><t:BodyType>HTML</t:BodyType><t:AdditionalProperties><t:ExtendedFieldURI PropertySetId="6ED8DA90-450B-101B-98DA-00AA003F1305" PropertyId="35" PropertyType="Binary"/></t:AdditionalProperties></m:ItemShape><m:ItemIds>{reference}</m:ItemIds></m:GetItem>"#))
+}
+
+fn calendar_item_read_result(xml: &str, request: &CalendarItemRequest) -> Result<Vec<EwsEvent>, String> {
+    let responses = xml_all_ns(xml, "m:GetItemResponseMessage");
+    if responses.is_empty() || responses.iter().any(|response| xml_content_ns(response, "m:ResponseCode").as_deref() != Some("NoError")) {
+        return Err(calendar_read_error("GetItem", xml));
+    }
+    let mut events = parse_calendar_events(xml)?;
+    if events.is_empty() || events.iter().any(|event| event.change_key.is_empty() || event.start.is_empty() || event.end.is_empty()) {
+        return Err("EWS calendar GetItem: InvalidEventSnapshot".into());
+    }
+    for detail in parse_get_item_response(xml) {
+        if let Some(event) = events.iter_mut().find(|event| event.item_id == detail.item_id) {
+            event.body = detail.body;
+            event.attendees = detail.attendees;
+            event.is_meeting |= !event.attendees.is_empty();
+            if request.recurring {
+                event.recurring_master_id = Some(detail.clean_global_object_id.unwrap_or_else(|| request.item_id.clone()));
+            }
+        }
+    }
+    Ok(events)
+}
+
+pub async fn ews_get_calendar_item(request: CalendarItemRequest) -> Result<Vec<EwsEvent>, String> {
+    let body = calendar_item_read_body(&request)?;
+    let xml = send_ews_request(&request.access_token, &body, request.owner_email.as_deref()).await?;
+    calendar_item_read_result(&xml, &request)
+}
+
+fn calendar_get_item_ids(items: &[(String, String)]) -> String {
+    // A read must use the current version, not a ChangeKey captured by FindItem.
+    items.iter().map(|(id, _)| format!(r#"<t:ItemId Id="{}"/>"#, xml_escape(id)))
+        .collect::<Vec<_>>().join("\n    ")
+}
+
+fn calendar_read_error(stage: &str, xml: &str) -> String {
+    let code = safe_ews_response_code(xml);
+    eprintln!("[EWS calendar] stage={stage} code={code}");
+    format!("EWS calendar {stage}: {code}")
+}
+
+// EWS returns one response per requested item, in request order. An item can
+// disappear between FindItem and GetItem without invalidating the other items.
+fn calendar_detail_responses(xml: &str, requested: &[(String, String)]) -> Result<(String, Vec<String>), String> {
+    let responses = xml_all_ns(xml, "m:GetItemResponseMessage");
+    if responses.len() != requested.len() {
+        if safe_ews_response_code(xml).starts_with("Error") {
+            return Err(calendar_read_error("GetItem", xml));
+        }
+        eprintln!("[EWS calendar] stage=GetItem code=InvalidResponseCount requested={} returned={}", requested.len(), responses.len());
+        return Err("EWS calendar GetItem: InvalidResponseCount".into());
+    }
+    let mut successful = String::new();
+    let mut missing = Vec::new();
+    for (response, (id, _)) in responses.iter().zip(requested) {
+        match xml_content_ns(response, "m:ResponseCode").as_deref() {
+            Some("NoError") => successful.push_str(response),
+            Some("ErrorItemNotFound" | "ErrorCalendarOccurrenceIsDeletedFromRecurrence" | "ErrorCalendarOccurrenceIndexIsOutOfRecurrenceRange") => missing.push(id.clone()),
+            _ => return Err(calendar_read_error("GetItem", response)),
+        }
+    }
+    Ok((successful, missing))
+}
+
+#[cfg(test)]
+mod calendar_detail_tests {
+    use super::*;
+
+    fn response(code: &str, body: &str) -> String {
+        format!(r#"<m:GetItemResponseMessage ResponseClass="{}"><m:ResponseCode>{code}</m:ResponseCode>{body}</m:GetItemResponseMessage>"#,
+            if code == "NoError" { "Success" } else { "Error" })
+    }
+
+    fn targeted_request(recurring: bool) -> CalendarItemRequest {
+        CalendarItemRequest { access_token: "secret".into(), item_id: "saved&item".into(), owner_email: None,
+            recurring, start: "2026-11-01T00:00:00Z".into(), end: "2027-05-01T00:00:00Z".into() }
+    }
+
+    #[test]
+    fn targeted_reads_only_the_saved_item_or_series_without_finditem() {
+        let single = calendar_item_read_body(&targeted_request(false)).unwrap();
+        assert!(single.contains(r#"<t:ItemId Id="saved&amp;item"/>"#));
+        assert!(!single.contains("FindItem"));
+        assert!(!single.contains("ChangeKey"));
+        assert!(!single.contains("secret"));
+        let series = calendar_item_read_body(&targeted_request(true)).unwrap();
+        assert!(series.contains(r#"<t:RecurringMasterItemIdRanges Id="saved&amp;item">"#));
+        assert!(series.contains(r#"Start="2026-11-01T00:00:00Z" End="2027-05-01T00:00:00Z" Count="500""#));
+        let mut invalid = targeted_request(true);
+        invalid.end = invalid.start.clone();
+        assert!(calendar_item_read_body(&invalid).is_err());
+    }
+
+    #[test]
+    fn targeted_result_keeps_teams_body_version_organizer_and_optional_guests() {
+        let item = r#"<t:CalendarItem><t:ItemId Id="saved" ChangeKey="latest"/><t:UID>uid</t:UID><t:Subject>Planning</t:Subject><t:Start>2026-11-10T10:00:00Z</t:Start><t:End>2026-11-10T11:00:00Z</t:End><t:Body BodyType="HTML">&lt;a href=&quot;https://teams.microsoft.com/meet/fixture&quot;&gt;Teams&lt;/a&gt;</t:Body><t:Organizer><t:Mailbox><t:Name>Me</t:Name><t:EmailAddress>me@example.test</t:EmailAddress></t:Mailbox></t:Organizer><t:OptionalAttendees><t:Attendee><t:Mailbox><t:EmailAddress>guest@example.test</t:EmailAddress><t:RoutingType>SMTP</t:RoutingType></t:Mailbox><t:ResponseType>Unknown</t:ResponseType></t:Attendee></t:OptionalAttendees><t:ExtendedProperty><t:ExtendedFieldURI PropertyId="35"/><t:Value>stable-series</t:Value></t:ExtendedProperty></t:CalendarItem>"#;
+        let xml = response("NoError", item);
+        let events = calendar_item_read_result(&xml, &targeted_request(false)).unwrap();
+        assert_eq!(events[0].change_key, "latest");
+        assert!(events[0].body.as_deref().unwrap().contains("https://teams.microsoft.com/meet/fixture"));
+        assert_eq!(events[0].organizer_email.as_deref(), Some("me@example.test"));
+        assert!(events[0].attendees[0].optional);
+        assert!(events[0].is_meeting);
+        assert!(events[0].recurring_master_id.is_none());
+        let recurring = calendar_item_read_result(&xml, &targeted_request(true)).unwrap();
+        assert_eq!(recurring[0].recurring_master_id.as_deref(), Some("stable-series"));
+        assert!(calendar_item_read_result(&response("ErrorAccessDenied", ""), &targeted_request(false)).is_err());
+        assert!(calendar_item_read_result(&response("NoError", ""), &targeted_request(false)).is_err());
+    }
+
+    #[test]
+    fn missing_item_does_not_poison_the_rest_of_the_batch_or_require_retrying() {
+        let requested = vec![("good".into(), "old-key".into()), ("gone".into(), "key".into())];
+        let good = r#"<m:Items><t:CalendarItem><t:ItemId Id="good" ChangeKey="new-key"/><t:Subject>Planning</t:Subject></t:CalendarItem></m:Items>"#;
+        let xml = response("NoError", good) + &response("ErrorItemNotFound", "<m:MessageText>private server message</m:MessageText>");
+        let (successful, missing) = calendar_detail_responses(&xml, &requested).unwrap();
+        assert_eq!(missing, vec!["gone"]);
+        let events = parse_calendar_events(&successful).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].change_key, "new-key");
+        assert!(!successful.contains("private server message"));
+    }
+
+    #[test]
+    fn property_permission_and_malformed_responses_remain_errors_with_their_stage_and_code() {
+        let requested = vec![("private-id".into(), "private-key".into())];
+        for code in ["ErrorInvalidPropertyRequest", "ErrorAccessDenied"] {
+            let error = calendar_detail_responses(&response(code, "<m:MessageText>private-address@example.test</m:MessageText>"), &requested).unwrap_err();
+            assert_eq!(error, format!("EWS calendar GetItem: {code}"));
+            assert!(!error.contains("private"));
+        }
+        assert_eq!(calendar_detail_responses("<m:GetItemResponse/>", &requested).unwrap_err(), "EWS calendar GetItem: InvalidResponseCount");
+        assert_eq!(calendar_read_error("FindItem", "<m:ResponseCode>ErrorItemNotFound</m:ResponseCode>"), "EWS calendar FindItem: ErrorItemNotFound");
+    }
+
+    #[test]
+    fn deleted_occurrences_are_skipped_without_treating_other_errors_as_missing() {
+        let requested = vec![("gone".into(), "key".into())];
+        for code in ["ErrorItemNotFound", "ErrorCalendarOccurrenceIsDeletedFromRecurrence", "ErrorCalendarOccurrenceIndexIsOutOfRecurrenceRange"] {
+            let (successful, missing) = calendar_detail_responses(&response(code, ""), &requested).unwrap();
+            assert!(successful.is_empty());
+            assert_eq!(missing, vec!["gone"]);
+        }
+        assert!(calendar_detail_responses(&response("ErrorServerBusy", ""), &requested).is_err());
+    }
+
+    #[test]
+    fn detail_reads_escape_identifiers_and_never_send_a_stale_finditem_change_key() {
+        let xml = calendar_get_item_ids(&[("a&b".into(), "stale-key".into())]);
+        assert_eq!(xml, r#"<t:ItemId Id="a&amp;b"/>"#);
+        assert!(!xml.contains("stale-key"));
+    }
+
+    #[test]
+    fn diagnostic_fields_never_include_payload_or_response_content() {
+        assert_eq!(ews_operation("<m:GetItem><m:private-token/></m:GetItem>"), "GetItem");
+        assert_eq!(ews_operation("<private-token/>"), "Other");
+        assert_eq!(safe_ews_response_code("<m:ResponseCode>ErrorItemNotFound</m:ResponseCode><m:MessageText>private-token</m:MessageText>"), "ErrorItemNotFound");
+        assert_eq!(safe_ews_response_code("<m:ResponseCode>private-token@example.test</m:ResponseCode>"), "UnknownEwsResponse");
+    }
 }
 
 // Keep the version token and editable fields from the same, most recent read.
@@ -188,6 +381,7 @@ pub async fn ews_create_event(
     refresh_token: Option<String>,
     sensitivity: Option<String>,
     availability: Option<String>,
+    optional_attendees: Option<Vec<String>>,
 ) -> Result<String, String> {
     validate_event_options(sensitivity.as_deref(), availability.as_deref())?;
     let sensitivity_xml = sensitivity.map(|v| format!("<t:Sensitivity>{v}</t:Sensitivity>")).unwrap_or_default();
@@ -224,27 +418,8 @@ pub async fn ews_create_event(
         .map(|s| format!(r#"<t:Body BodyType="HTML">{}</t:Body>"#, xml_escape(&s)))
         .unwrap_or_default();
 
-    let attendees_xml = attendees
-        .unwrap_or_default()
-        .iter()
-        .map(|email| {
-            format!(
-            "<t:Attendee><t:Mailbox><t:EmailAddress>{}</t:EmailAddress></t:Mailbox></t:Attendee>",
-            xml_escape(email)
-        )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let attendees_block = if attendees_xml.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<t:RequiredAttendees>{}</t:RequiredAttendees>",
-            attendees_xml
-        )
-    };
-
-    let invitations_attr = if attendees_xml.is_empty() {
+    let attendees_block = creation_attendees_xml(&attendees.unwrap_or_default(), &optional_attendees.unwrap_or_default());
+    let invitations_attr = if attendees_block.is_empty() {
         "SendToNone"
     } else {
         "SendToAllAndSaveCopy"
@@ -302,15 +477,30 @@ pub async fn ews_create_event(
 }
 
 // None at the call site preserves participants; an empty list explicitly removes them.
+fn creation_attendees_xml(required: &[String], optional: &[String]) -> String {
+    [("RequiredAttendees", required), ("OptionalAttendees", optional)].iter()
+        .filter(|(_, attendees)| !attendees.is_empty())
+        .map(|(field, attendees)| format!("<t:{field}>{}</t:{field}>", attendee_mailboxes(attendees)))
+        .collect::<Vec<_>>().join("")
+}
+
 fn attendees_update_xml(attendees: &[String]) -> String {
-    if attendees.is_empty() {
-        return r#"<t:DeleteItemField><t:FieldURI FieldURI="calendar:RequiredAttendees"/></t:DeleteItemField>"#.into();
-    }
-    let mailboxes = attendees.iter().map(|email| format!(
+    attendee_list_update_xml("RequiredAttendees", attendees)
+}
+
+fn attendee_mailboxes(attendees: &[String]) -> String {
+    attendees.iter().map(|email| format!(
         "<t:Attendee><t:Mailbox><t:EmailAddress>{}</t:EmailAddress></t:Mailbox></t:Attendee>",
         xml_escape(email)
-    )).collect::<Vec<_>>().join("");
-    format!(r#"<t:SetItemField><t:FieldURI FieldURI="calendar:RequiredAttendees"/><t:CalendarItem><t:RequiredAttendees>{mailboxes}</t:RequiredAttendees></t:CalendarItem></t:SetItemField>"#)
+    )).collect::<Vec<_>>().join("")
+}
+
+fn attendee_list_update_xml(field: &str, attendees: &[String]) -> String {
+    if attendees.is_empty() {
+        return format!(r#"<t:DeleteItemField><t:FieldURI FieldURI="calendar:{field}"/></t:DeleteItemField>"#);
+    }
+    let mailboxes = attendee_mailboxes(attendees);
+    format!(r#"<t:SetItemField><t:FieldURI FieldURI="calendar:{field}"/><t:CalendarItem><t:{field}>{mailboxes}</t:{field}></t:CalendarItem></t:SetItemField>"#)
 }
 
 fn check_update_response(xml: &str) -> Result<(), String> {
@@ -323,10 +513,14 @@ fn check_update_response(xml: &str) -> Result<(), String> {
 }
 
 fn verify_updated_attendees(xml: &str, expected: &[String]) -> Result<(), String> {
+    verify_attendee_list(xml, expected, "t:RequiredAttendees")
+}
+
+fn verify_attendee_list(xml: &str, expected: &[String], field: &str) -> Result<(), String> {
     check_update_response(xml)?;
     let item = xml_all_ns(xml, "t:CalendarItem").into_iter().next()
         .ok_or("ews_attendees_verification_failed")?;
-    let actual: Vec<String> = xml_content_ns(&item, "t:RequiredAttendees")
+    let actual: Vec<String> = xml_content_ns(&item, field)
         .map(|list| xml_all_ns(&list, "t:Attendee").iter().filter_map(|attendee|
             xml_content_ns(attendee, "t:EmailAddress").map(|email| xml_decode(&email))
         ).collect()).unwrap_or_default();
@@ -355,6 +549,7 @@ pub async fn ews_update_event(
     attendees: Option<Vec<String>>,
     sensitivity: Option<String>,
     availability: Option<String>,
+    optional_attendees: Option<Vec<String>>,
 ) -> Result<(), String> {
     validate_event_options(sensitivity.as_deref(), availability.as_deref())?;
     let mut target_item_id = item_id.clone();
@@ -426,6 +621,9 @@ pub async fn ews_update_event(
     if let Some(attendees) = &attendees {
         updates.push(attendees_update_xml(attendees));
     }
+    if let Some(optional) = &optional_attendees {
+        updates.push(attendee_list_update_xml("OptionalAttendees", optional));
+    }
 
     updates.push(super::recurrence::recurrence_update_xml(recurrence.as_deref(), &start)?);
 
@@ -450,12 +648,13 @@ pub async fn ews_update_event(
     let xml = send_ews_request(&access_token, &soap_body, None).await?;
 
     check_update_response(&xml)?;
-    if let Some(attendees) = attendees {
+    if attendees.is_some() || optional_attendees.is_some() {
         // Read the saved item with its new ID, never the stale pre-update ChangeKey.
         let (saved_id, _) = parse_response_master(&xml)?;
-        let body = format!(r#"<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="calendar:RequiredAttendees"/></t:AdditionalProperties></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds></m:GetItem>"#, xml_escape(&saved_id));
+        let body = format!(r#"<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="calendar:RequiredAttendees"/><t:FieldURI FieldURI="calendar:OptionalAttendees"/></t:AdditionalProperties></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds></m:GetItem>"#, xml_escape(&saved_id));
         let saved = send_ews_request(&access_token, &body, None).await?;
-        verify_updated_attendees(&saved, &attendees)?;
+        if let Some(attendees) = attendees { verify_updated_attendees(&saved, &attendees)?; }
+        if let Some(optional) = optional_attendees { verify_attendee_list(&saved, &optional, "t:OptionalAttendees")?; }
     }
     Ok(())
 }
@@ -870,6 +1069,37 @@ mod response_tests {
     use super::*;
 
     #[test]
+    fn creation_with_only_optional_guests_is_a_meeting_and_preserves_the_role() {
+        let xml = creation_attendees_xml(&[], &["guest@example.test".into()]);
+        assert!(!xml.is_empty()); // CreateItem must send invitations even without required guests.
+        assert!(!xml.contains("RequiredAttendees"));
+        assert!(xml.contains("<t:OptionalAttendees><t:Attendee>"));
+        assert!(xml.contains("<t:EmailAddress>guest@example.test</t:EmailAddress>"));
+        let saved = format!(r#"<t:CalendarItem><t:ItemId Id="event" ChangeKey="key"/><t:IsMeeting>true</t:IsMeeting>{xml}</t:CalendarItem>"#)
+            .replace("<t:EmailAddress>", "<t:RoutingType>SMTP</t:RoutingType><t:EmailAddress>");
+        let events = super::super::parse_calendar_events(&saved).unwrap();
+        assert!(events[0].is_meeting);
+        assert_eq!(events[0].attendees[0].email, "guest@example.test");
+        assert!(events[0].attendees[0].optional);
+    }
+
+    #[test]
+    fn optional_roles_are_written_removed_verified_and_read_back() {
+        let update = attendee_list_update_xml("OptionalAttendees", &["a&b@example.org".into()]);
+        assert!(update.contains(r#"FieldURI="calendar:OptionalAttendees""#));
+        assert!(update.contains("<t:OptionalAttendees>"));
+        assert!(update.contains("a&amp;b@example.org"));
+        assert!(!update.contains("RequiredAttendees"));
+        assert!(attendee_list_update_xml("OptionalAttendees", &[]).contains("<t:DeleteItemField>"));
+        let saved = r#"<m:ResponseCode>NoError</m:ResponseCode><t:CalendarItem><t:OptionalAttendees><t:Attendee><t:Mailbox><t:RoutingType>SMTP</t:RoutingType><t:EmailAddress>guest@example.org</t:EmailAddress></t:Mailbox></t:Attendee></t:OptionalAttendees></t:CalendarItem>"#;
+        assert!(verify_attendee_list(saved, &["GUEST@example.org".into()], "t:OptionalAttendees").is_ok());
+        assert!(verify_attendee_list(saved, &["guest@example.org".into()], "t:RequiredAttendees").is_err());
+        assert!(verify_attendee_list(saved, &[], "t:OptionalAttendees").is_err());
+        let details = super::super::parse_get_item_response(&saved.replace("<t:CalendarItem>", "<t:CalendarItem><t:ItemId Id=\"event\"/>"));
+        assert!(details[0].attendees[0].optional);
+    }
+
+    #[test]
     fn update_requires_explicit_success_and_preserved_participants() {
         assert!(check_update_response("<ResponseCode>ErrorAccessDenied</ResponseCode>").unwrap_err().contains("ErrorAccessDenied"));
         assert!(check_update_response("<m:ResponseCode>ErrorIrresolvableConflict</m:ResponseCode>").is_err());
@@ -961,7 +1191,7 @@ mod online_meeting_tests {
     async fn teams_requires_refresh_token_before_creating_an_ews_event() {
         let result = super::ews_create_event(
             "unused".into(), "Meeting".into(), "2026-10-15T14:00:00Z".into(),
-            "2026-10-15T15:00:00Z".into(), false, None, None, None, None, true, None, None, None,
+            "2026-10-15T15:00:00Z".into(), false, None, None, None, None, true, None, None, None, None,
         ).await;
         assert_eq!(result.unwrap_err(), "teams_auth_required");
     }

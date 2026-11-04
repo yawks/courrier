@@ -799,6 +799,36 @@
 }
 
 /* ── Calendar container ──────────────────────────── */
+.calendar-creation-notices {
+  flex-shrink: 0;
+  max-height: 30vh;
+  overflow-y: auto;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.calendar-creation-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar-creation-notice p {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: calc(13px * var(--font-scale, 1));
+  line-height: 1.45;
+}
+
+.calendar-creation-notice [role="alert"] { color: var(--danger); }
+.calendar-creation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.calendar-creation-actions button { min-height: 44px; }
+
 .calendar-container {
   flex: 1;
   overflow: hidden;

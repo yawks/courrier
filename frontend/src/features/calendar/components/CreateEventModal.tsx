@@ -81,10 +81,10 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
     if (defaultId && writableCalendars.some((c) => c.id === defaultId)) return defaultId;
     return writableCalendars[0]?.id ?? '';
   });
-  const [attendees, setAttendees] = useState<Array<{ email: string; name?: string }>>(
+  const [attendees, setAttendees] = useState<NonNullable<CreateEventPayload['attendees']>>(
     editEvent?.attendees
       ?.filter((a) => a.email && !a.email.startsWith('/O='))
-      .map((a) => ({ email: a.email, name: a.name })) ?? []
+      .map((a) => ({ email: a.email, name: a.name, optional: a.optional })) ?? []
   );
   const [currentRule, setCurrentRule] = useState<string | null>(null);
   const [recurrenceLoading, setRecurrenceLoading] = useState(false);
@@ -351,15 +351,17 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
     };
   }, [onClose]);
 
+  const submitInFlight = useRef(false);
   const handleSubmit = async (e: { preventDefault(): void }, scope?: EditRecurringScope) => {
     e.preventDefault();
-    if (editingRecurrence) return;
+    if (submitInFlight.current || saving || editingRecurrence) return;
     if (editEvent?.isRecurringInstance && scope === undefined) { setError(t('recurrence.chooseScope')); return; }
     if (!title.trim() || !calendarId) return;
 
     const startIso = isAllday ? startDate : new Date(start).toISOString();
     const endIso   = isAllday ? endDate   : new Date(end).toISOString();
 
+    submitInFlight.current = true;
     setSaving(true);
     setError('');
     try {
@@ -383,6 +385,7 @@ export default function CreateEventModal({ initialStart, initialEnd, writableCal
       await onSubmit(payload, scope);
       onClose();
     } catch (err) {
+      submitInFlight.current = false;
       const message = err instanceof Error ? err.message : String(err);
       setError(message.includes('ews_attendees_verification_failed') ? t('createEvent.attendeesVerificationError') : localizeTeamsError(message) ?? (err instanceof Error ? err.message : t('createEvent.saveError')));
       setSaving(false);

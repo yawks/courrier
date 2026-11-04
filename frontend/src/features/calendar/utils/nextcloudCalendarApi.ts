@@ -1,3 +1,4 @@
+import { parseICS } from './parseICS';
 import { validateEventOptions } from './eventOptions';
 import { t } from 'i18next';
 import { anchorSeriesDates } from './seriesDates';
@@ -73,7 +74,7 @@ function buildVCalendar(uid: string, payload: CreateEventPayload): string {
     for (const a of payload.attendees) {
       const cn = a.name ? `;CN=${escapeICS(a.name)}` : '';
       lines.push(
-        `ATTENDEE${cn};CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a.email}`
+        `ATTENDEE${cn};CUTYPE=INDIVIDUAL;ROLE=${a.optional ? 'OPT-PARTICIPANT' : 'REQ-PARTICIPANT'};PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a.email}`
       );
     }
   }
@@ -104,6 +105,14 @@ export async function createNextcloudEvent(cal: CalendarConfig, payload: CreateE
     password: cal.nextcloudPassword ?? '',
   }, icsContent);
   return uid;
+}
+
+/** A created CalDAV UID has a known resource URL; no collection REPORT is needed. */
+export async function getCreatedNextcloudEvent(cal: CalendarConfig, uid: string): Promise<CalendarEvent[]> {
+  const text = await calendarApi.fetchCalDav({ url: eventResourceUrl(cal, uid), username: cal.nextcloudUsername ?? '', password: cal.nextcloudPassword ?? '' });
+  const events = parseICS(text, cal).filter(event => event.sourceId === uid);
+  if (!events.length) throw new Error('CalDAV: saved event not found in resource');
+  return events;
 }
 
 export async function updateNextcloudEvent(

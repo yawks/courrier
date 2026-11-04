@@ -250,6 +250,17 @@
     }
   },
   "createEvent": {
+    "waitingForConfirmation": "This event is awaiting confirmation. Editing will be available once its saved details have been received.",
+    "background": {
+      "saving": "Saving “{{title}}”…",
+      "checking": "Checking “{{title}}” on the server…",
+      "saved": "“{{title}}” was created.",
+      "refreshFailed": "“{{title}}” was created, but its saved details could not be read. Retry checking without creating it again.",
+      "failed": "“{{title}}” was not created. The provisional event was removed. You can retry.",
+      "uncertain": "Creation of “{{title}}” could not be confirmed. The event remains provisional. Check the server before creating it again to avoid duplicates.",
+      "retry": "Retry",
+      "check": "Check server"
+    },
     "endDate": "End date",
     "differentEndDate": "Different end date",
     "moreOptions": "Recurrence, availability and visibility",
@@ -299,6 +310,9 @@
     "saveError": "Error saving event"
   },
   "attendeeInput": {
+    "optional": "Optional",
+    "required": "Required",
+    "optionalFor": "Optional participation for {{name}}",
     "placeholder": "Name or email…",
     "remove": "Remove {{name}}"
   },

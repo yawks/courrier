@@ -1,8 +1,8 @@
 import { AttendeeStatus, CalendarConfig, CalendarEvent } from '../../../shared/types';
-import { cacheGetStale, cacheIsFresh, cacheSet, patchCachedEventRsvp } from '../utils/eventCache';
+import { cacheGetStale, cacheIsFresh, cacheSet, patchCachedEventRsvp, mergeCreatedEvents } from '../utils/eventCache';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { listEvents } from '../utils/googleCalendarApi';
+import { getCreatedGoogleEvent, listEvents } from '../utils/googleCalendarApi';
 import { useGoogleAuth } from '../../../shared/store/GoogleAuthStore';
 
 const CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -27,6 +27,9 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { getValidToken } = useGoogleAuth();
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+  const creationVersions = useRef(new Map<string, number>());
   const calendarsRef = useRef(calendars);
   calendarsRef.current = calendars;
   const onLoadedRef = useRef(onLoaded);
@@ -42,13 +45,17 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
       return;
     }
 
+    const versions = new Map(creationVersions.current);
     // Phase 1: show stale cache immediately (IDB read — very fast, no network)
     const stale = (await Promise.all(googleCals.map(async (cal) => {
       const cached = await cacheGetStale<CalendarEvent[]>(cacheKey(cal.id));
-      if (cached) onLoadedRef.current?.(cal.id, cached);
+      if (cached && creationVersions.current.get(cal.id) === versions.get(cal.id)) onLoadedRef.current?.(cal.id, cached);
       return cached;
     }))).flat().filter(Boolean) as CalendarEvent[];
-    if (stale.length > 0) setEvents(stale);
+    if (stale.length > 0) setEvents(current => [
+      ...stale.filter(event => creationVersions.current.get(event.calendarId) === versions.get(event.calendarId)),
+      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)),
+    ]);
 
     // Phase 2: refresh expired / forced caches
     const toRefresh = force
@@ -66,8 +73,9 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
         const token = await getValidToken(cal.googleAccountId!);
         if (!token) throw new Error('Token invalide ou expiré. Reconnectez votre compte Google.');
         const fetched = await listEvents(token, cal, timeMin, timeMax);
+        if (creationVersions.current.get(cal.id) !== versions.get(cal.id)) return eventsRef.current.filter(event => event.calendarId === cal.id);
         await cacheSet(cacheKey(cal.id), fetched);
-        onLoadedRef.current?.(cal.id, fetched);
+        if (creationVersions.current.get(cal.id) === versions.get(cal.id)) onLoadedRef.current?.(cal.id, fetched);
         return fetched;
       })
     );
@@ -90,7 +98,10 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
       }
     }
 
-    setEvents(results);
+    setEvents(current => [
+      ...results.filter(event => creationVersions.current.get(event.calendarId) === versions.get(event.calendarId)),
+      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)),
+    ]);
     setErrors(newErrors);
     setLoading(false);
     return results;
@@ -110,7 +121,24 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
 
   const refresh = useCallback((calendarId?: string) => run(true, calendarId), [run]);
 
-  return { events, loading, errors, refresh };
+  const refreshCreated = useCallback(async (calendarId: string, sourceId: string) => {
+    const cal = calendarsRef.current.find(cal => cal.id === calendarId);
+    if (!cal) throw new Error('Calendar not found');
+    const token = await getValidToken(cal.googleAccountId!);
+    if (!token) throw new Error('Google calendar: missing access token');
+    const incoming = await getCreatedGoogleEvent(token, cal, sourceId);
+    creationVersions.current.set(calendarId, (creationVersions.current.get(calendarId) ?? 0) + 1);
+    const merged = mergeCreatedEvents(eventsRef.current, incoming, calendarId, sourceId);
+    eventsRef.current = merged;
+    setEvents(merged);
+    const updated = merged.filter(event => event.calendarId === calendarId);
+    onLoadedRef.current?.(calendarId, updated);
+    setErrors(current => { const next = { ...current }; delete next[calendarId]; return next; });
+    await cacheSet(cacheKey(calendarId), updated, true);
+    return incoming;
+  }, [getValidToken]);
+
+  return { events, loading, errors, refresh, refreshCreated };
 }
 
 /** Patch a single Google event's RSVP status in the IndexedDB cache. */

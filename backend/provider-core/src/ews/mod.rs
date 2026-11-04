@@ -43,6 +43,8 @@ pub struct TokenResponse {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct EwsAttendee {
+    #[serde(default)]
+    pub optional: bool,
     pub name: Option<String>,
     pub email: String,
     pub response_type: String,
@@ -208,9 +210,18 @@ pub(crate) async fn send_ews_request(
     soap_body: &str,
     anchor_mailbox: Option<&str>,
 ) -> Result<String, String> {
+    static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let request_id = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let operation = ews_operation(soap_body);
     let budget = throttle::budget(access_token);
-    let _permit = budget.acquire().await?;
-    let client = reqwest::Client::new();
+    let _permit = budget.acquire().await.map_err(|error| {
+        eprintln!("[EWS request] id={request_id} operation={operation} blocked (no HTTP request)");
+        error
+    })?;
+    let client = CLIENT.get_or_init(reqwest::Client::new);
+    let started = std::time::Instant::now();
+    eprintln!("[EWS request] id={request_id} operation={operation} send");
     let envelope = soap_envelope(soap_body);
 
     let mut request = client
@@ -226,11 +237,15 @@ pub(crate) async fn send_ews_request(
         .body(envelope)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            eprintln!("[EWS request] id={request_id} operation={operation} transport_error elapsed_ms={}", started.elapsed().as_millis());
+            e.to_string()
+        })?;
 
     let status = response.status();
     let retry_after = throttle::retry_after(response.headers());
     let body = response.text().await.map_err(|e| e.to_string())?;
+    eprintln!("[EWS request] id={request_id} operation={operation} http={} code={} elapsed_ms={}", status.as_u16(), safe_ews_response_code(&body), started.elapsed().as_millis());
     budget.response(status.as_u16(), &body, retry_after)?;
 
     if status.as_u16() == 401 {
@@ -241,6 +256,21 @@ pub(crate) async fn send_ews_request(
     }
 
     Ok(body)
+}
+
+fn ews_operation(body: &str) -> &'static str {
+    for operation in ["FindItem", "GetItem", "CreateItem", "UpdateItem", "DeleteItem", "GetFolder", "FindFolder", "GetUserAvailabilityRequest", "ResolveNames", "Subscribe", "GetRooms", "GetRoomLists"] {
+        if body.trim_start().starts_with(&format!("<m:{operation}>")) || body.trim_start().starts_with(&format!("<m:{operation} ")) {
+            return operation;
+        }
+    }
+    "Other"
+}
+
+fn safe_ews_response_code(xml: &str) -> String {
+    xml_content_ns(xml, "m:ResponseCode")
+        .filter(|code| code.len() < 96 && (code == "NoError" || code.starts_with("Error")) && code.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| "UnknownEwsResponse".into())
 }
 
 /// Wait until Exchange reports a mail change through an EWS streaming
@@ -505,6 +535,7 @@ fn parse_calendar_events(xml: &str) -> Result<Vec<EwsEvent>, String> {
                     let response_type = xml_content(&att_xml, "t:ResponseType")
                         .unwrap_or_else(|| "Unknown".to_string());
                     attendees.push(EwsAttendee {
+                        optional: *list_tag == "t:OptionalAttendees",
                         email,
                         name,
                         response_type,
@@ -596,6 +627,7 @@ fn parse_get_item_response(xml: &str) -> Vec<GetItemDetail> {
                     let response_type = xml_content(&att_xml, "t:ResponseType")
                         .unwrap_or_else(|| "Unknown".to_string());
                     attendees.push(EwsAttendee {
+                        optional: *list_tag == "t:OptionalAttendees",
                         email,
                         name,
                         response_type,

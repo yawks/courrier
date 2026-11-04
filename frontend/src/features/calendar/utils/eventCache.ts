@@ -57,12 +57,19 @@ export async function cacheGetStale<T>(key: string): Promise<T | null> {
   }
 }
 
-export async function cacheSet<T>(key: string, value: T): Promise<void> {
+export async function cacheSet<T>(key: string, value: T, preserveAge = false): Promise<void> {
   try {
     const db = await openDB();
     await new Promise<void>((resolve) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ value, at: Date.now() } satisfies CacheEntry<T>, key);
+      const store = tx.objectStore(STORE);
+      if (preserveAge) {
+        // A partial refresh must not make unrelated, older entries look fresh.
+        const request = store.get(key);
+        request.onsuccess = () => store.put({ value, at: request.result?.at ?? 0 } satisfies CacheEntry<T>, key);
+      } else {
+        store.put({ value, at: Date.now() } satisfies CacheEntry<T>, key);
+      }
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -129,4 +136,11 @@ export async function cacheIsFresh(key: string, ttl: number): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Replace only the saved event/series, leaving unrelated cached events intact. */
+export function mergeCreatedEvents(events: import('../../../shared/types').CalendarEvent[], incoming: import('../../../shared/types').CalendarEvent[], calendarId: string, sourceId: string) {
+  const ids = new Set(incoming.map(event => event.id));
+  return [...events.filter(event => event.calendarId !== calendarId ||
+    (!ids.has(event.id) && event.sourceId?.split('|')[0] !== sourceId && event.seriesId !== sourceId && event.icalUid !== sourceId)), ...incoming];
 }

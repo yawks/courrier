@@ -5,6 +5,7 @@ import { CalendarEvent } from '../../../shared/types';
 import { ContactAvatar } from '../../mail/components/ContactAvatar';
 
 interface AttendeeEntry {
+  optional?: boolean;
   email: string;
   name?: string;
 }
@@ -172,6 +173,15 @@ export default function AttendeeInput({ value, onChange, allEvents }: Props) {
                 <span className="attendee-chip-label">{a.name ?? a.email}</span>
                 {a.name && <span className="attendee-chip-email">{a.email}</span>}
               </div>
+              <button
+                type="button"
+                className="attendee-chip-role btn-ghost"
+                aria-label={t('attendeeInput.optionalFor', { name: a.name ?? a.email })}
+                aria-pressed={!!a.optional}
+                onClick={() => onChange(value.map(entry => entry.email === a.email ? { ...entry, optional: !entry.optional } : entry))}
+              >
+                {t(a.optional ? 'attendeeInput.optional' : 'attendeeInput.required')}
+              </button>
               <button
                 type="button"
                 className="attendee-chip-remove"

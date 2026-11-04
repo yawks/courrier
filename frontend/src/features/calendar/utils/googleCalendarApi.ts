@@ -24,6 +24,7 @@ interface GoogleEventDateTime {
 }
 
 interface GoogleAttendee {
+  optional?: boolean;
   email: string;
   displayName?: string;
   responseStatus: 'accepted' | 'declined' | 'tentative' | 'needsAction';
@@ -104,7 +105,13 @@ function googleEventToCalendarEvent(gEvent: GoogleEvent, cal: CalendarConfig, ow
     email: a.email,
     status: mapResponseStatus(a.responseStatus),
     isOrganizer: a.organizer ?? false,
+    optional: a.optional ?? false,
   }));
+
+  if (attendees?.length && gEvent.organizer && !attendees.some(a => a.isOrganizer)) {
+    attendees.unshift({ email: gEvent.organizer.email, name: gEvent.organizer.displayName ?? gEvent.organizer.email,
+      status: 'ACCEPTED', isOrganizer: true, optional: false });
+  }
 
   // Determine RSVP status from the owner's perspective
   // Prefer a.self === true (Google marks your own entry) over email matching which can fail with aliases
@@ -215,6 +222,32 @@ export async function listEvents(
   return results;
 }
 
+/** Read the saved item (and only its instances for a recurring series). */
+export async function getCreatedGoogleEvent(token: string, cal: CalendarConfig, sourceId: string): Promise<CalendarEvent[]> {
+  const path = `/calendars/${encodeURIComponent(cal.googleCalendarId ?? 'primary')}/events/${encodeURIComponent(sourceId)}`;
+  const saved = await gFetch<GoogleEvent>(token, path);
+  if (!saved.recurrence?.length) {
+    const event = googleEventToCalendarEvent(saved, cal, cal.ownerEmail);
+    if (!event) throw new Error('Google calendar: invalid saved event');
+    return [event];
+  }
+  const start = new Date(); start.setDate(start.getDate() - 52 * 7);
+  const end = new Date(); end.setDate(end.getDate() + 104 * 7);
+  const results: CalendarEvent[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ timeMin: start.toISOString(), timeMax: end.toISOString(), maxResults: '2500', ...(pageToken ? { pageToken } : {}) });
+    const data = await gFetch<GoogleEventList>(token, `${path}/instances?${params}`);
+    for (const item of data.items ?? []) {
+      const event = googleEventToCalendarEvent(item, cal, cal.ownerEmail);
+      if (event) results.push(event);
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  if (!results.length) throw new Error('Google calendar: saved series has no visible occurrences');
+  return results;
+}
+
 function buildEventBody(payload: CreateEventPayload): Record<string, unknown> {
   validateEventOptions(payload, 'google');
   const body: Record<string, unknown> = {
@@ -234,9 +267,9 @@ function buildEventBody(payload: CreateEventPayload): Record<string, unknown> {
     body.end = { dateTime: payload.end, timeZone: payload.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
   }
 
-  if (payload.attendees && payload.attendees.length > 0) {
+  if (payload.attendees) {
     body.attendees = payload.attendees.map((a) => {
-      const entry: Record<string, string> = { email: a.email };
+      const entry: Record<string, string | boolean> = { email: a.email, optional: !!a.optional };
       if (a.name) entry.displayName = a.name;
       return entry;
     });

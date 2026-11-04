@@ -250,6 +250,17 @@
     }
   },
   "createEvent": {
+    "waitingForConfirmation": "La confirmation de cet évènement est en cours. La modification sera disponible après réception de ses données enregistrées.",
+    "background": {
+      "saving": "Enregistrement de « {{title}} » en cours…",
+      "checking": "Vérification de « {{title}} » sur le serveur…",
+      "saved": "« {{title}} » a été créé.",
+      "refreshFailed": "« {{title}} » a été créé, mais ses données enregistrées n’ont pas pu être relues. Réessayez la vérification sans le recréer.",
+      "failed": "« {{title}} » n’a pas été créé. Le rendez-vous provisoire a été retiré. Vous pouvez réessayer.",
+      "uncertain": "La création de « {{title}} » n’a pas pu être confirmée. Le rendez-vous reste provisoire. Vérifiez le serveur avant de le recréer pour éviter un doublon.",
+      "retry": "Réessayer",
+      "check": "Vérifier sur le serveur"
+    },
     "endDate": "Date de fin",
     "differentEndDate": "Autre date de fin",
     "moreOptions": "Récurrence, disponibilité et visibilité",
@@ -299,6 +310,9 @@
     "saveError": "Erreur lors de la sauvegarde"
   },
   "attendeeInput": {
+    "optional": "Optionnel",
+    "required": "Obligatoire",
+    "optionalFor": "Participation optionnelle pour {{name}}",
     "placeholder": "Nom ou adresse e-mail…",
     "remove": "Supprimer {{name}}"
   },

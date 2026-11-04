@@ -21,7 +21,7 @@ export function useEWSEvents(calendars: CalendarConfig[], onLoaded?: (id: string
     refresh: (calendarId?: string) => queryClient.refetchQueries({
       queryKey: calendarId ? CALENDAR_KEYS.events(calendarId) : CALENDAR_KEYS.all,
       type: 'active',
-    }),
+    }, { cancelRefetch: false }),
   }), [events, isLoading, errors, ewsCals, queryClient]);
 }
 

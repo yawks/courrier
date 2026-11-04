@@ -238,6 +238,7 @@ function AttendeeRow({ attendee }: { readonly attendee: Attendee }) {
           </button>
         )}
         {attendee.isOrganizer && <span className="attendee-organizer">{t('eventModal.organizer')}</span>}
+        {attendee.optional && <span className="attendee-organizer">{t('attendeeInput.optional')}</span>}
       </span>
     </div>
   );
@@ -544,7 +545,7 @@ export default function EventModal({ event, calendar, onClose, onEdit, onEditTas
           )}
 
           <div className="modal-body">
-            {(calendar?.shared || event.readOnly) && <p className="shared-calendar-help">{t(event.isTask ? 'config.caldavTaskReadOnly' : event.availabilityOnly ? 'sharedCalendars.availabilityOnly' : 'sharedCalendars.readOnly')}</p>}
+            {(calendar?.shared || event.readOnly) && <p className="shared-calendar-help">{t(event.id.startsWith('temp-') && !calendar?.shared ? 'createEvent.waitingForConfirmation' : event.isTask ? 'config.caldavTaskReadOnly' : event.availabilityOnly ? 'sharedCalendars.availabilityOnly' : 'sharedCalendars.readOnly')}</p>}
             {event.caldavTask?.project && <p className="caldav-task-metadata"><strong>{t('caldavTask.project')}:</strong> {event.caldavTask.project}</p>}
             {!!event.caldavTask?.categories.length && <p className="caldav-task-metadata"><strong>{t('caldavTask.labels')}:</strong> {event.caldavTask.categories.join(', ')}</p>}
             <div className="modal-row">

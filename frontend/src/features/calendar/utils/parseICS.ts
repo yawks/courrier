@@ -44,7 +44,7 @@ function parseAttendees(vevent: any): Attendee[] {
       const status: AttendeeStatus = VALID_STATUSES.has(raw as AttendeeStatus)
         ? (raw as AttendeeStatus)
         : 'NEEDS-ACTION';
-      attendees.push({ name, email, status });
+      attendees.push({ name, email, status, optional: prop.getParameter('role')?.toUpperCase() === 'OPT-PARTICIPANT' });
     }
   } catch {
     // best-effort

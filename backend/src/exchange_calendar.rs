@@ -21,6 +21,7 @@ pub struct CreateRequest {
     location: Option<String>,
     description: Option<String>,
     attendees: Option<Vec<String>>,
+    optional_attendees: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,7 @@ pub struct UpdateRequest {
     sensitivity: Option<String>,
     availability: Option<String>,
     attendees: Option<Vec<String>>,
+    optional_attendees: Option<Vec<String>>,
     original_start: Option<String>,
     recurrence: Option<String>,
     access_token: String, item_id: String, change_key: String,
@@ -124,7 +126,7 @@ async fn send(token: &str, body: &str, anchor: Option<&str>) -> Result<String, A
 }
 
 pub async fn create(Json(request): Json<CreateRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = app_lib::ews::ews_create_event(request.access_token, request.title, request.start, request.end, request.is_all_day, request.location, request.description, request.attendees, request.recurrence, request.online_meeting, request.refresh_token, request.sensitivity, request.availability).await
+    let result = app_lib::ews::ews_create_event(request.access_token, request.title, request.start, request.end, request.is_all_day, request.location, request.description, request.attendees, request.recurrence, request.online_meeting, request.refresh_token, request.sensitivity, request.availability, request.optional_attendees).await
         .map_err(|error| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": error }))))?;
     let (item_id, change_key) = result.split_once('|').unwrap_or((&result, ""));
     Ok(Json(serde_json::json!({ "itemId": item_id, "changeKey": change_key })))
@@ -139,7 +141,7 @@ pub async fn respond(Json(request): Json<RespondRequest>) -> Result<Json<serde_j
 }
 
 pub async fn update(Json(request): Json<UpdateRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    app_lib::ews::ews_update_event(request.access_token, request.item_id, request.change_key, request.title, request.start, request.end, request.is_all_day, request.location, request.description, request.update_series, request.recurrence, request.original_start, request.attendees, request.sensitivity, request.availability).await
+    app_lib::ews::ews_update_event(request.access_token, request.item_id, request.change_key, request.title, request.start, request.end, request.is_all_day, request.location, request.description, request.update_series, request.recurrence, request.original_start, request.attendees, request.sensitivity, request.availability, request.optional_attendees).await
         .map_err(|error| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": error }))))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -166,6 +168,11 @@ pub async fn cancel(Json(request): Json<CancelRequest>) -> Result<Json<serde_jso
     let body = format!(r#"<m:CreateItem MessageDisposition="SendAndSaveCopy"><m:Items><t:CancelCalendarItem><t:ReferenceItemId Id="{}" ChangeKey="{}"/></t:CancelCalendarItem></m:Items></m:CreateItem>"#, escape(&item_id), escape(&change_key));
     send(&request.access_token, &body, None).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn get(Json(request): Json<app_lib::ews::CalendarItemRequest>) -> Result<Json<Vec<app_lib::ews::EwsEvent>>, ApiError> {
+    app_lib::ews::ews_get_calendar_item(request).await.map(Json)
+        .map_err(|error| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": error }))))
 }
 
 pub async fn list(Json(request): Json<ListRequest>) -> Result<Json<Vec<app_lib::ews::EwsEvent>>, ApiError> {

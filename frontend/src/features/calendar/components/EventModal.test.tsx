@@ -15,6 +15,19 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
 });
+it.each([true, false])('shows a sole optional EWS guest in event details (provisional=%s)', async provisional => {
+  await i18n.changeLanguage('fr');
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<EventModal calendar={{ ...calendar, type: 'exchange' }} onClose={vi.fn()}
+      event={{ ...event, id: provisional ? 'temp-event' : 'saved-event', readOnly: provisional,
+        attendees: [{ email: 'guest@example.test', name: 'Camille', optional: true, status: 'NEEDS-ACTION' }] }} />));
+    const row = host.querySelector('.attendee-row');
+    expect(row?.textContent).toContain('Camille');
+    expect(row?.textContent).toContain('Optionnel');
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
 it.each(['fr', 'en'])('keeps CalDAV tasks read-only even when write callbacks are supplied (%s)', async language => {
   await i18n.changeLanguage(language);
   const host = document.createElement('div');
@@ -121,4 +134,16 @@ it.each([320, 480, 1024])('centers over the visible mail panel at %s px and foll
     anchor.remove();
     vi.unstubAllGlobals();
   }
+});
+
+it.each(['fr', 'en'])('explains a pending creation without calling the calendar shared or read-only (%s)', async language => {
+  await i18n.changeLanguage(language);
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<EventModal event={{ ...event, id: 'temp-creation', readOnly: true }} calendar={calendar} onClose={vi.fn()} onEdit={vi.fn()} />));
+    expect(host.textContent).toContain(i18n.t('createEvent.waitingForConfirmation'));
+    expect(host.textContent).not.toContain(i18n.t('sharedCalendars.readOnly'));
+    expect(host.querySelector('.lucide-pencil')).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });

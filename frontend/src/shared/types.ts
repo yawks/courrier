@@ -130,7 +130,7 @@ export interface CreateEventPayload {
   description?: string;
   /** CalendarConfig.id of the target calendar */
   calendarId: string;
-  attendees?: Array<{ email: string; name?: string }>;
+  attendees?: Array<{ email: string; name?: string; optional?: boolean }>;
   tagId?: string | null;
 }
 
@@ -144,6 +144,7 @@ export type AttendeeStatus =
   | 'DELEGATED';
 
 export interface Attendee {
+  optional?: boolean;
   name: string;
   email: string;
   status: AttendeeStatus;

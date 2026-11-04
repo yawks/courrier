@@ -22,6 +22,8 @@ import { formatDateLabel, DARK_THEME, LIGHT_THEME, toTUIEvents, escapeCalendarTe
 
 import { isCalendarWritable } from './utils/sharedCalendars';
 
+import EventCreationStatus from './components/EventCreationStatus';
+
 export default function CalendarPage() {
   const { t } = useTranslation();
   const [isMobile, setIsMobile] = useState(() => globalThis.matchMedia?.('(max-width: 700px)').matches ?? false);
@@ -112,6 +114,10 @@ export default function CalendarPage() {
     handleNavigateToDate,
     handleViewChange,
     handleSaveEvent,
+    eventCreations,
+    dismissEventCreation,
+    retryEventCreation,
+    recheckEventCreation,
     loadEventRecurrence,
     handleRsvp,
     handleDeleteEvent,
@@ -310,6 +316,7 @@ export default function CalendarPage() {
         onToggleEventStatus={handleToggleEventStatus}
       />
 
+      <EventCreationStatus operations={eventCreations} onDismiss={dismissEventCreation} onRetry={retryEventCreation} onRecheck={recheckEventCreation} />
       <div className="app-body">
         {isMobile && mobileSidebarOpen && (
           <button

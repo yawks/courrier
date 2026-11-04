@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEvent, updateEvent, deleteGoogleEvent, respondToGoogleEvent } from './googleCalendarApi';
 import { createNextcloudEvent, updateNextcloudEvent, deleteNextcloudEvent, cancelNextcloudEvent, respondToNextcloudEvent } from './nextcloudCalendarApi';
 import { calendarApi } from '../../../shared/api/calendarApi';
+import { parseICS } from './parseICS';
 import { CalendarConfig, CalendarEvent, CreateEventPayload } from '../../../shared/types';
 // @ts-ignore ical.js v1 has no bundled declarations
 import ICAL from 'ical.js';
@@ -72,7 +73,25 @@ describe('CalDAV recurrence writes', () => {
 });
 
 describe('participant updates across calendar providers', () => {
-  const attendees = [{ email: 'existing@example.org' }, { email: 'new@example.org' }];
+  const attendees = [{ email: 'existing@example.org', optional: false }, { email: 'new@example.org', optional: true }];
+  it('writes required and optional Google roles on creation and update', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"id":"new"}'));
+    await createEvent('token', cal, { ...payload, attendees });
+    await updateEvent('token', cal, 'event', { ...payload, attendees: attendees.map(a => ({ ...a, optional: !a.optional })) });
+    expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string).attendees).toEqual(attendees);
+    expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string).attendees).toEqual(attendees.map(a => ({ ...a, optional: !a.optional })));
+    await updateEvent('token', cal, 'event', { ...payload, attendees: [] });
+    expect(JSON.parse(fetchMock.mock.calls[2][1]!.body as string).attendees).toEqual([]);
+  });
+  it('writes required and optional CalDAV roles on creation and update', async () => {
+    await createNextcloudEvent(cal, { ...payload, attendees });
+    await updateNextcloudEvent(cal, 'series', { ...payload, attendees: attendees.map(a => ({ ...a, optional: !a.optional })) }, source, true);
+    const roles = vi.mocked(calendarApi.putCalDav).mock.calls.map(call =>
+      new ICAL.Component(ICAL.parse(call[1])).getFirstSubcomponent('vevent').getAllProperties('attendee').map((a: any) => a.getParameter('role')));
+    expect(roles).toEqual([['REQ-PARTICIPANT', 'OPT-PARTICIPANT'], ['OPT-PARTICIPANT', 'REQ-PARTICIPANT']]);
+    const parsed = parseICS(vi.mocked(calendarApi.putCalDav).mock.calls[0][1], cal);
+    expect(parsed[0].attendees?.map(a => a.optional)).toEqual([false, true]);
+  });
   it('includes existing and added Google participants and propagates failures', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
     await updateEvent('token', cal, 'event', { ...payload, attendees });

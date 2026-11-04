@@ -26,7 +26,7 @@ interface EwsEventRaw {
   organizer_name?: string;
   organizer_email?: string;
   my_response_type: string;
-  attendees: Array<{ name?: string; email: string; response_type: string; }>;
+  attendees: Array<{ name?: string; email: string; response_type: string; optional?: boolean; }>;
   is_meeting: boolean;
   is_cancelled: boolean;
   recurring_master_id?: string;
@@ -60,23 +60,16 @@ async function fetchEWSEvents(cal: CalendarConfig, accessToken: string): Promise
 
   console.info('[Exchange calendar] Synchronisation démarrée', {
     calendarId: cal.id,
-    account: cal.ownerEmail,
   });
 
-  let raw: EwsEventRaw[];
-  try {
-    raw = await exchangeCalendarApi.list<EwsEventRaw[]>({
+  const raw = await exchangeCalendarApi.list<EwsEventRaw[]>({
       accessToken,
       ownerEmail: cal.ownerEmail,
       folderId: cal.exchangeFolderId,
       sharedMailbox: cal.shared?.ownerEmail,
       start: start.toISOString(),
       end: end.toISOString(),
-    });
-  } catch (error) {
-    console.error('[Exchange calendar] Échec de la synchronisation', error);
-    throw error;
-  }
+  });
 
   const receivedDates = raw
     .map((event) => Date.parse(event.start))
@@ -85,12 +78,17 @@ async function fetchEWSEvents(cal: CalendarConfig, accessToken: string): Promise
   const lastDate = receivedDates.length > 0 ? new Date(Math.max(...receivedDates)).toISOString() : null;
   console.info(`[Exchange calendar] ${raw.length} événement(s) reçu(s)`, { firstDate, lastDate });
 
-  return raw.map((ev): CalendarEvent => {
+  return raw.map(ev => ewsEventToCalendarEvent(ev, cal));
+}
+
+export function ewsEventToCalendarEvent(ev: EwsEventRaw, cal: CalendarConfig): CalendarEvent {
+    const isMeeting = ev.is_meeting || ev.attendees.length > 0;
     const attendees = ev.attendees.map((a) => ({
       name: a.name ?? a.email,
       email: a.email,
       status: ewsResponseToRsvp(a.response_type),
       isOrganizer: false,
+      optional: a.optional ?? false,
     }));
     if (ev.organizer_email || ev.organizer_name) {
       const organizerEmail = displayableEwsAddress(ev.organizer_email);
@@ -99,6 +97,7 @@ async function fetchEWSEvents(cal: CalendarConfig, accessToken: string): Promise
         email: organizerEmail,
         status: 'ACCEPTED',
         isOrganizer: true,
+        optional: false,
       });
     }
     const selfStatus = ewsResponseToRsvp(ev.my_response_type);
@@ -121,11 +120,20 @@ async function fetchEWSEvents(cal: CalendarConfig, accessToken: string): Promise
       description: ev.body || undefined,
       isDeclined: selfStatus === 'DECLINED',
       isCancelled: ev.is_cancelled,
-      isUnaccepted: selfStatus !== 'ACCEPTED' && ev.is_meeting,
-      selfRsvpStatus: ev.is_meeting ? selfStatus : undefined,
-      attendees: ev.is_meeting ? attendees : [],
+      isUnaccepted: selfStatus !== 'ACCEPTED' && isMeeting,
+      selfRsvpStatus: isMeeting ? selfStatus : undefined,
+      attendees: isMeeting ? attendees : [],
     };
+}
+
+export async function fetchEWSItem(cal: CalendarConfig, accessToken: string, itemId: string, start: string, end: string, recurring: boolean): Promise<CalendarEvent[]> {
+  const horizon = new Date();
+  horizon.setDate(horizon.getDate() + 26 * 7);
+  const raw = await exchangeCalendarApi.get<EwsEventRaw[]>({
+    accessToken, itemId, ownerEmail: cal.ownerEmail, recurring,
+    start: new Date(start).toISOString(), end: new Date(Math.max(horizon.getTime(), Date.parse(end))).toISOString(),
   });
+  return raw.map(ev => ewsEventToCalendarEvent(ev, cal));
 }
 
 // --- MAIN HOOK ---
@@ -146,6 +154,9 @@ export function useCalendarEvents(calendars: CalendarConfig[], onLoaded?: (id: s
       enabled: cal.type === 'exchange',
       staleTime: 5 * 60 * 1000,
       retry: false, // Don't flood on Auth error
+      retryOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     }))
   });
 
