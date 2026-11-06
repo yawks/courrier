@@ -490,6 +490,8 @@ struct HttpPut {
     password: String,
     ics_content: String,
     if_match: Option<String>,
+    #[serde(default)]
+    if_none_match: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -656,15 +658,15 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
         }
         "calendar_ics_fetch" => {
             let a: HttpUrl = args(value)?;
-            native_http("GET", a.url, None, None, None, None).await
+            native_http("GET", a.url, None, None, None, None, false).await
         }
         "calendar_caldav_fetch" => {
             let a: HttpAuth = args(value)?;
-            native_http("GET", a.url, Some(a.username), Some(a.password), None, None).await
+            native_http("GET", a.url, Some(a.username), Some(a.password), None, None, false).await
         }
         "calendar_caldav_status" => {
             let a: HttpAuth = args(value)?;
-            native_http("STATUS", a.url, Some(a.username), Some(a.password), None, None).await
+            native_http("STATUS", a.url, Some(a.username), Some(a.password), None, None, false).await
         }
         "calendar_caldav_put" => {
             let a: HttpPut = args(value)?;
@@ -675,12 +677,13 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
                 Some(a.password),
                 Some(a.ics_content),
                 a.if_match,
+                a.if_none_match,
             )
             .await
         }
         "calendar_caldav_delete" => {
             let a: HttpAuth = args(value)?;
-            native_http("DELETE", a.url, Some(a.username), Some(a.password), None, None).await
+            native_http("DELETE", a.url, Some(a.username), Some(a.password), None, None, false).await
         }
         "config_webdav_fetch" => {
             let a: HttpAuth = args(value)?;
@@ -1334,6 +1337,7 @@ async fn native_http(
     password: Option<String>,
     body: Option<String>,
     if_match: Option<String>,
+    if_none_match: bool,
 ) -> CommandResult {
     let url = reqwest::Url::parse(&raw_url).map_err(|error| CommandError {
         code: "invalid_provider_url",
@@ -1376,7 +1380,7 @@ async fn native_http(
             )
             .body(body);
     }
-    let request = crate::caldav::conditional_put(request, if_match.as_deref());
+    let request = crate::caldav::conditional_put(request, if_match.as_deref(), if_none_match);
     let response = request.send().await.map_err(|error| CommandError {
         code: "provider_request_failed",
         detail: error.to_string(),

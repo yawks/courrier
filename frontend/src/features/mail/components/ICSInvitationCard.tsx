@@ -1,3 +1,4 @@
+import { respondToNextcloudInvitation } from '../../calendar/utils/nextcloudInvitation';
 import { matchCounterProposal } from '../../calendar/utils/counterProposal';
 /**
  * ICSInvitationCard
@@ -713,8 +714,10 @@ export function ICSInvitationCard({
     setRsvpOverride(undefined);
   }, [sourceKey, selectedCalId]);
 
+  const rsvpSaving = useRef(false);
   const handleRsvp = useCallback(async (status: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE') => {
-    if (!selectedCal || !icsData) return;
+    if (!selectedCal || !icsData || rsvpSaving.current) return;
+    rsvpSaving.current = true;
     const prevOverride = rsvpOverride; // capture for rollback
     setRsvpOverride(status);           // optimistic update — UI reflects choice instantly
     setLoadingAction(status);
@@ -736,27 +739,38 @@ export function ICSInvitationCard({
         event = matchEvent(icsData,
           refreshed.filter(candidate => candidate.calendarId === selectedCal.id));
       }
-      if (!event) throw new Error(t('invitation.notInCalendar'));
-      await executeRsvp(selectedCal, event, status, getGoogleToken, getExchangeToken);
+      if (selectedCal.type === 'nextcloud' && (!event || icsData.method === 'PUBLISH')) {
+        const src = sourceRef.current;
+        const text = src.kind === 'text' ? src.icsText : decodeBase64Utf8(await src.getAttachmentData(src.attachment));
+        await respondToNextcloudInvitation(selectedCal, text, selectedCal.ownerEmail || currentUserEmail || '', status, currentUserEmail);
+      } else {
+        if (!event) throw new Error(t('invitation.notInCalendar'));
+        await executeRsvp(selectedCal, event, status, getGoogleToken, getExchangeToken);
+      }
       saveStoredRsvp(icsData, selectedCal.id, status);
       // Patch the IndexedDB cache so the calendar view reflects the change
-      const { id: eventId, calendarId } = event;
-      if (selectedCal.type === 'exchange') {
-        await patchEWSCachedRsvp(calendarId, eventId, status);
-      } else if (selectedCal.type === 'google') {
-        await patchGoogleCachedRsvp(calendarId, eventId, status);
-      } else if (selectedCal.type === 'nextcloud') {
-        await patchNextcloudCachedRsvp(calendarId, eventId, status);
+      if (event) {
+        const { id: eventId, calendarId } = event;
+        if (selectedCal.type === 'exchange') {
+          await patchEWSCachedRsvp(calendarId, eventId, status);
+        } else if (selectedCal.type === 'google') {
+          await patchGoogleCachedRsvp(calendarId, eventId, status);
+        } else if (selectedCal.type === 'nextcloud') {
+          await patchNextcloudCachedRsvp(calendarId, eventId, status);
+        }
       }
       const successMsgMap: Record<string, string> = { ACCEPTED: t('invitation.acceptedSuccess'), DECLINED: t('invitation.declinedSuccess'), TENTATIVE: t('invitation.tentativeSuccess') };
-      setActionSuccess(successMsgMap[status] ?? '');
+      setActionSuccess(selectedCal.type === 'nextcloud' && icsData.method === 'PUBLISH'
+        ? t('invitation.publishedSaved') : successMsgMap[status] ?? '');
+      if (!event) await refreshNextcloudEvents(selectedCal.id).catch(() => undefined);
     } catch (e) {
       setRsvpOverride(prevOverride); // rollback optimistic update
       setActionError(String(e));
     } finally {
+      rsvpSaving.current = false;
       setLoadingAction(null);
     }
-  }, [selectedCal, icsData, matchedInSelected, getGoogleToken, getExchangeToken, rsvpOverride, t, refreshNextcloudEvents, refreshGoogleEvents, queryClient]);
+  }, [currentUserEmail, selectedCal, icsData, matchedInSelected, getGoogleToken, getExchangeToken, rsvpOverride, t, refreshNextcloudEvents, refreshGoogleEvents, queryClient]);
 
   const handleAddToCalendar = useCallback(async () => {
     if (!selectedCal || !icsData) return;

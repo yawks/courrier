@@ -19,3 +19,12 @@ describe('calendarApi', () => {
     await expect(calendarApi.fetchIcs('https://attacker.example/feed.ics')).rejects.toThrow('provider_host_not_allowed');
   });
 });
+
+it('passes create-only protection to the web CalDAV adapter', async () => {
+  const request = vi.fn().mockResolvedValue(new Response('{}'));
+  vi.stubGlobal('fetch', request);
+  try {
+    await calendarApi.putCalDav({ url: 'https://cloud.test/event.ics', username: 'me', password: 'test' }, 'ICS', undefined, true);
+    expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ ifNoneMatch: true });
+  } finally { vi.unstubAllGlobals(); }
+});

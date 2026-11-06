@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
+vi.mock('../../calendar/utils/nextcloudInvitation', () => ({ respondToNextcloudInvitation: vi.fn().mockRejectedValue(new Error('invalid invitation')) }));
+import { respondToNextcloudInvitation } from '../../calendar/utils/nextcloudInvitation';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import type { CalendarConfig, CalendarEvent } from '../../../shared/types';
-const fixtures = vi.hoisted(() => ({ calendars: [] as CalendarConfig[], events: [] as CalendarEvent[], timeline: vi.fn(), detail: vi.fn(), google: vi.fn(), exchange: vi.fn(), nextcloud: vi.fn(), refetch: vi.fn(), queryData: [] as CalendarEvent[] }));
+const fixtures = vi.hoisted(() => ({ calendars: [] as CalendarConfig[], events: [] as CalendarEvent[], timeline: vi.fn(), detail: vi.fn(), google: vi.fn(), exchange: vi.fn(), nextcloud: vi.fn(), refetch: vi.fn(), queryData: [] as CalendarEvent[], ncRefresh: vi.fn().mockResolvedValue([]) }));
 vi.mock('../../calendar/store/CalendarStore', () => ({ useCalendars: () => ({ calendars: fixtures.calendars }) }));
 vi.mock('../../../shared/store/GoogleAuthStore', () => ({ useGoogleAuth: () => ({ getValidToken: vi.fn().mockResolvedValue('token') }) }));
 vi.mock('../../../shared/store/ExchangeAuthStore', () => ({ useExchangeAuth: () => ({ accounts: [{ id: 'account', email: 'me@example.test', displayName: 'Me' }], getValidToken: vi.fn().mockResolvedValue('token') }) }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn(), refetchQueries: fixtures.refetch, getQueryData: () => fixtures.queryData }) }));
 vi.mock('../../calendar/hooks/useGoogleEvents', () => ({ useGoogleEvents: (calendars: CalendarConfig[]) => { fixtures.google(calendars); return { events: fixtures.events.filter(e => calendars.some(c => c.id === e.calendarId && c.type === 'google')), refresh: vi.fn() }; }, patchGoogleCachedRsvp: vi.fn() }));
-vi.mock('../../calendar/hooks/useNextcloudEvents', () => ({ useNextcloudEvents: (calendars: CalendarConfig[]) => { fixtures.nextcloud(calendars); return { events: fixtures.events.filter(e => calendars.some(c => c.id === e.calendarId && c.type === 'nextcloud')), refresh: vi.fn() }; }, patchNextcloudCachedRsvp: vi.fn() }));
+vi.mock('../../calendar/hooks/useNextcloudEvents', () => ({ useNextcloudEvents: (calendars: CalendarConfig[]) => { fixtures.nextcloud(calendars); return { events: fixtures.events.filter(e => calendars.some(c => c.id === e.calendarId && c.type === 'nextcloud')), refresh: fixtures.ncRefresh }; }, patchNextcloudCachedRsvp: vi.fn() }));
 vi.mock('../../calendar/hooks/useCalendarQueries', () => ({ CALENDAR_KEYS: { events: vi.fn() }, useCalendarEvents: (calendars: CalendarConfig[]) => { fixtures.exchange(calendars); return { events: fixtures.events.filter(e => calendars.some(c => c.id === e.calendarId && c.type === 'exchange')) }; } }));
 vi.mock('../../calendar/hooks/useEWSEvents', () => ({ patchEWSCachedRsvp: vi.fn() }));
 vi.mock('../../calendar/components/DayEventsTimeline', () => ({ DayEventsTimeline: (props: unknown) => { fixtures.timeline(props); return null; } }));
@@ -237,5 +239,49 @@ it.each([
       expect(events).toHaveLength(2);
       expect(host.querySelector('[role="alert"]')).not.toBeNull();
     }
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it.each(['success', 'refresh failure'] as const)('accepts a mail-only Nextcloud invitation once: %s', async outcome => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.clear();
+  fixtures.calendars = [{ id: 'nextcloud', type: 'nextcloud', name: 'Nextcloud', url: 'https://cloud.test/calendar/', color: '#123456', visible: true, ownerEmail: 'me@example.test' }];
+  fixtures.events = [];
+  let complete!: () => void;
+  fixtures.ncRefresh.mockReset().mockResolvedValue([]);
+  if (outcome === 'refresh failure') fixtures.ncRefresh.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error('refresh failed'));
+  vi.mocked(respondToNextcloudInvitation).mockClear();
+  vi.mocked(respondToNextcloudInvitation).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+  const text = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:mail-only\r\nDTSTART:20261119T120000Z\r\nDTEND:20261119T130000Z\r\nSUMMARY:Invitation\r\nEND:VEVENT\r\nEND:VCALENDAR';
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ICSInvitationCard currentUserEmail="alias@example.test" source={{ kind: 'text', icsText: text }} />));
+    await act(async () => { const button = host.querySelector<HTMLButtonElement>('.ics-btn--accept')!; button.click(); button.click(); });
+    expect(respondToNextcloudInvitation).toHaveBeenCalledTimes(1);
+    expect(respondToNextcloudInvitation).toHaveBeenCalledWith(fixtures.calendars[0], text, 'me@example.test', 'ACCEPTED', 'alias@example.test');
+    await act(async () => complete());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(localStorage.getItem(localStorage.key(0)!)).toBe('ACCEPTED');
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it('keeps PUBLISH status changes local even when the appointment is already cached', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.clear();
+  fixtures.calendars = [{ id: 'nextcloud', type: 'nextcloud', name: 'Nextcloud', url: 'https://cloud.test/calendar/', color: '#123456', visible: true, ownerEmail: 'me@example.test' }];
+  fixtures.events = [{ id: 'published', sourceId: 'published', icalUid: 'published', calendarId: 'nextcloud', title: 'Appointment', start: '2026-11-19T12:00:00Z', end: '2026-11-19T13:00:00Z', isAllday: false, category: 'time' }];
+  const text = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:PUBLISH\r\nBEGIN:VEVENT\r\nUID:published\r\nDTSTART:20261119T120000Z\r\nDTEND:20261119T130000Z\r\nSUMMARY:Appointment\r\nEND:VEVENT\r\nEND:VCALENDAR';
+  vi.mocked(respondToNextcloudInvitation).mockClear().mockResolvedValueOnce();
+  vi.mocked(respondToNextcloudEvent).mockClear();
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ICSInvitationCard currentUserEmail="alias@example.test" source={{ kind: 'text', icsText: text }} />));
+    await act(async () => host.querySelector<HTMLButtonElement>('.ics-btn--accept')!.click());
+    expect(respondToNextcloudInvitation).toHaveBeenCalledWith(fixtures.calendars[0], text, 'me@example.test', 'ACCEPTED', 'alias@example.test');
+    expect(respondToNextcloudEvent).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('No reply');
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

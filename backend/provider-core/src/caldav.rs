@@ -1,7 +1,8 @@
 //! Read-only DAV discovery, shared by the web adapter and native transports.
 use serde::Deserialize;
 
-pub fn conditional_put(request: reqwest::RequestBuilder, if_match: Option<&str>) -> reqwest::RequestBuilder {
+pub fn conditional_put(request: reqwest::RequestBuilder, if_match: Option<&str>, if_none_match: bool) -> reqwest::RequestBuilder {
+    if if_none_match { return request.header(reqwest::header::IF_NONE_MATCH, "*"); }
     match if_match { Some(etag) => request.header(reqwest::header::IF_MATCH, etag), None => request }
 }
 
@@ -48,10 +49,12 @@ mod tests {
     #[test]
     fn conditional_calendar_writes_preserve_the_exact_etag_and_leave_legacy_writes_unconditional() {
         let client = reqwest::Client::new();
-        let request = conditional_put(client.put("https://example.test/dav/task.ics"), Some("\"version-2\"")).build().unwrap();
+        let request = conditional_put(client.put("https://example.test/dav/task.ics"), Some("\"version-2\""), false).build().unwrap();
         assert_eq!(request.headers()[reqwest::header::IF_MATCH], "\"version-2\"");
-        let request = conditional_put(client.put("https://example.test/dav/event.ics"), None).build().unwrap();
+        let request = conditional_put(client.put("https://example.test/dav/event.ics"), None, false).build().unwrap();
         assert!(!request.headers().contains_key(reqwest::header::IF_MATCH));
+        let request = conditional_put(client.put("https://example.test/dav/invite.ics"), None, true).build().unwrap();
+        assert_eq!(request.headers()[reqwest::header::IF_NONE_MATCH], "*");
     }
 
     #[test]

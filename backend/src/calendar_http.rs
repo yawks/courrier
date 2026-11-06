@@ -23,7 +23,7 @@ pub struct AuthRequest { url: String, username: String, password: String }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PutRequest { url: String, username: String, password: String, ics_content: String, if_match: Option<String> }
+pub struct PutRequest { url: String, username: String, password: String, ics_content: String, if_match: Option<String>, #[serde(default)] if_none_match: bool }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigPutRequest { url: String, username: String, password: String, content: String, if_match: Option<String> }
@@ -97,7 +97,7 @@ pub async fn put(State(state): State<CalendarHttpState>, Json(body): Json<PutReq
     let url = state.checked_url(&body.url)?;
     let request = state.client.put(url).basic_auth(body.username, Some(body.password))
         .header("content-type", "text/calendar; charset=utf-8").body(body.ics_content);
-    let response = app_lib::caldav::conditional_put(request, body.if_match.as_deref()).send().await.map_err(upstream)?;
+    let response = app_lib::caldav::conditional_put(request, body.if_match.as_deref(), body.if_none_match).send().await.map_err(upstream)?;
     if !response.status().is_success() { return Err(upstream(format!("provider_http_{}", response.status().as_u16()))); }
     Ok(Json(serde_json::json!({ "ok": true })))
 }

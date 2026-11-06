@@ -36,8 +36,8 @@ export const calendarApi = {
     if (hasNativeTransport()) return (await invokeNative<{ status: number }>('calendar_caldav_status', credentials)).status;
     return (await request<{ status: number }>('/caldav/status', credentials)).status;
   },
-  async putCalDav(credentials: Credentials, icsContent: string, ifMatch?: string): Promise<void> {
-    const args = { ...credentials, icsContent, ...(ifMatch ? { ifMatch } : {}) };
+  async putCalDav(credentials: Credentials, icsContent: string, ifMatch?: string, ifNoneMatch = false): Promise<void> {
+    const args = { ...credentials, icsContent, ...(ifMatch ? { ifMatch } : {}), ...(ifNoneMatch ? { ifNoneMatch: true } : {}) };
     if (hasNativeTransport()) { await invokeNative('calendar_caldav_put', args); return; }
     await request('/caldav/resource', args, 'PUT');
   },
