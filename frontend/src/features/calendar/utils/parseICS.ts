@@ -2,10 +2,10 @@
 // @ts-ignore – ical.js has no bundled types for v1.x
 import ICAL from 'ical.js';
 import { CalendarConfig, CalendarEvent, Attendee, AttendeeStatus } from '../../../shared/types';
+import { calendarSyncRange } from './calendarSync';
 
-const RANGE_PAST_WEEKS = 52;
-const RANGE_FUTURE_WEEKS = 104;
-const MAX_RECURRENCES = 500;
+const MAX_RECURRENCE_STEPS = 1_000_000;
+const MAX_VISIBLE_RECURRENCES = 50_000;
 
 const VALID_STATUSES = new Set<AttendeeStatus>([
   'ACCEPTED', 'DECLINED', 'TENTATIVE', 'NEEDS-ACTION', 'DELEGATED',
@@ -123,19 +123,22 @@ function expandRecurring(
     });
     let count = 0;
     let next = expand.next();
-    while (next && count < MAX_RECURRENCES) {
+    while (next) {
       const d: Date = next.toJSDate();
-      if (d > rangeEnd) break;
-      if (d >= rangeStart) {
-        const det = icalEvent.getOccurrenceDetails(next);
+      if (d >= rangeEnd) break;
+      if (++count > MAX_RECURRENCE_STEPS || results.length >= MAX_VISIBLE_RECURRENCES) {
+        throw new Error('calendar_recurrence_limit');
+      }
+      const det = icalEvent.getOccurrenceDetails(next);
+      if (det.startDate.toJSDate() < rangeEnd && det.endDate.toJSDate() > rangeStart) {
         results.push({ ...buildEvent(det.startDate, det.endDate, det.item, calendar, next.toString(), true), recurrenceId: toISO(next) });
       }
-      count++;
       next = expand.next();
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'calendar_recurrence_limit') throw error;
     const startDate: Date = icalEvent.startDate?.toJSDate();
-    if (startDate && startDate >= rangeStart && startDate <= rangeEnd) {
+    if (startDate && startDate < rangeEnd && icalEvent.endDate?.toJSDate() > rangeStart) {
       results.push(buildEvent(icalEvent.startDate, icalEvent.endDate, icalEvent, calendar));
     }
   }
@@ -150,12 +153,8 @@ interface VEventGroup {
 }
 
 function buildDateRange(): { rangeStart: Date; rangeEnd: Date } {
-  const now = new Date();
-  const rangeStart = new Date(now);
-  rangeStart.setDate(rangeStart.getDate() - RANGE_PAST_WEEKS * 7);
-  const rangeEnd = new Date(now);
-  rangeEnd.setDate(rangeEnd.getDate() + RANGE_FUTURE_WEEKS * 7);
-  return { rangeStart, rangeEnd };
+  const range = calendarSyncRange();
+  return { rangeStart: new Date(range.start), rangeEnd: new Date(range.end) };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -188,7 +187,7 @@ function processGroup(
       return expandRecurring(icalEvent, calendar, rangeStart, rangeEnd);
     }
     const startDate: Date = icalEvent.startDate?.toJSDate();
-    if (startDate && startDate >= rangeStart && startDate <= rangeEnd) {
+    if (startDate && startDate < rangeEnd && icalEvent.endDate?.toJSDate() > rangeStart) {
       return [buildEvent(icalEvent.startDate, icalEvent.endDate, icalEvent, calendar)];
     }
     return [];
@@ -198,14 +197,14 @@ function processGroup(
   return group.exceptions.flatMap((vevent) => {
     const icalEvent = new ICAL.Event(vevent);
     const startDate: Date = icalEvent.startDate?.toJSDate();
-    if (startDate && startDate >= rangeStart && startDate <= rangeEnd) {
+    if (startDate && startDate < rangeEnd && icalEvent.endDate?.toJSDate() > rangeStart) {
       return [buildEvent(icalEvent.startDate, icalEvent.endDate, icalEvent, calendar)];
     }
     return [];
   });
 }
 
-export function parseICS(icsText: string, calendar: CalendarConfig): CalendarEvent[] {
+export function parseICS(icsText: string, calendar: CalendarConfig, strict = false): CalendarEvent[] {
   try {
     const comp = new ICAL.Component(ICAL.parse(icsText));
     const { rangeStart, rangeEnd } = buildDateRange();
@@ -214,6 +213,8 @@ export function parseICS(icsText: string, calendar: CalendarConfig): CalendarEve
       processGroup(group, calendar, rangeStart, rangeEnd)
     );
   } catch (e) {
+    if (strict) throw new Error(e instanceof Error && e.message === 'calendar_recurrence_limit'
+      ? 'calendar_recurrence_limit' : 'calendar_invalid_ics');
     console.error(`[parseICS] Failed for "${calendar.name}":`, e);
     return [];
   }

@@ -40,6 +40,7 @@ struct ImapFolder {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ImapList {
+    has_attachment: Option<bool>,
     config: crate::imap::ImapConfig,
     folder: String,
     max_count: Option<u32>,
@@ -473,10 +474,6 @@ struct ExchangeFreeBusy {
     end: String,
 }
 #[derive(Deserialize)]
-struct HttpUrl {
-    url: String,
-}
-#[derive(Deserialize)]
 struct HttpAuth {
     url: String,
     username: String,
@@ -558,6 +555,12 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
         "exchange_calendar_get" => {
             let a: crate::ews::CalendarItemRequest = args(value)?;
             output(crate::ews::ews_get_calendar_item(a).await)
+        }
+        "exchange_calendar_delta" => {
+            output(crate::ews::ews_calendar_delta(args(value)?).await)
+        }
+        "exchange_calendar_inventory" => {
+            output(crate::ews::ews_calendar_inventory(args(value)?).await)
         }
         "exchange_calendar_list" => {
             let a: ExchangeList = args(value)?;
@@ -657,8 +660,7 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
             output(crate::ews::ews_get_free_busy_ews(a.refresh_token, a.emails, a.start, a.end, a.anchor_mailbox).await)
         }
         "calendar_ics_fetch" => {
-            let a: HttpUrl = args(value)?;
-            native_http("GET", a.url, None, None, None, None, false).await
+            output(crate::caldav::fetch_ics(args(value)?).await)
         }
         "calendar_caldav_fetch" => {
             let a: HttpAuth = args(value)?;
@@ -703,7 +705,7 @@ pub async fn dispatch(command: &str, value: Value) -> CommandResult {
         }
         "imap_list_threads" => {
             let a: ImapList = args(value)?;
-            output(crate::imap::imap_list_threads(a.config, a.folder, a.max_count, a.offset).await)
+            output(crate::imap::imap_list_threads(a.config, a.folder, a.max_count, a.offset, a.has_attachment).await)
         }
         "imap_get_thread" => {
             let a: ImapThread = args(value)?;

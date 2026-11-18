@@ -127,7 +127,7 @@ export function useCalendarLogic() {
 
   const { calendars: realCalendars, toggleCalendar, updateCalendar, reorderCalendars } = useCalendars();
   const { groups, addGroup, removeGroup, updateGroup } = useCalendarGroups();
-  const { tags, eventTags, addTag, removeTag, updateTag, setEventTag, removeEventTag } = useTags();
+  const { tags, eventTags, addTag, removeTag, updateTag, setEventTag, removeEventTag, refreshTags, isSynchronizing: tagsSynchronizing } = useTags();
   const androidCalendars = useAndroidCalendars();
   const sourceCalendars = DEMO_MODE || androidCalendars ? [] : realCalendars;
   const fallbackIcs = useICSEvents(sourceCalendars);
@@ -193,7 +193,7 @@ export function useCalendarLogic() {
     }
   }, [events, selectedEvent, creation.operations]);
 
-  const loading = DEMO_MODE ? false : (icsLoading || googleLoading || ncLoading || ewsLoading);
+  const loading = DEMO_MODE ? false : (icsLoading || googleLoading || ncLoading || ewsLoading || !!tagsSynchronizing);
   const [taskMoveErrors, setTaskMoveErrors] = useState<Record<string, string>>({});
   const taskMoves = useRef(new Set<string>());
   const errors = useMemo(() => {
@@ -209,8 +209,11 @@ export function useCalendarLogic() {
       Promise.resolve(googleRefresh()),
       Promise.resolve(ncRefresh()),
       ewsRefresh(),
+      // The vault exposes tag-sync failures through its existing sync status;
+      // an unavailable WebDAV must not fail the calendar refresh itself.
+      refreshTags().catch(() => {}),
     ]);
-  }, [icsRefresh, googleRefresh, ncRefresh, ewsRefresh]);
+  }, [icsRefresh, googleRefresh, ncRefresh, ewsRefresh, refreshTags]);
 
   const handlePrev = useCallback(() => {
     const inst = calendarRef.current?.getInstance();

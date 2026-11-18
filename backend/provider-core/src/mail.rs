@@ -58,6 +58,22 @@ fn search_folder_xml(folder: &str) -> String {
     }
 }
 
+fn search_requests_xml(folder_id_xmls: &[String], query_escaped: &str) -> Vec<String> {
+    // Keep AQS requests scoped to one folder for Exchange compatibility.
+    folder_id_xmls.iter().map(|folder_id_xml| format!(
+        r#"<m:FindItem Traversal="Shallow">
+  <m:ItemShape>
+    <t:BaseShape>AllProperties</t:BaseShape>
+    <t:AdditionalProperties><t:FieldURI FieldURI="item:Preview"/></t:AdditionalProperties>
+  </m:ItemShape>
+  <m:ParentFolderIds>
+    {folder_id_xml}
+  </m:ParentFolderIds>
+  <m:QueryString>{query_escaped}</m:QueryString>
+</m:FindItem>"#,
+    )).collect()
+}
+
 // ── Private network helpers ───────────────────────────────────────────────────
 
 /// Mail and calendar use the same Exchange 2013 envelope and account budget.
@@ -1075,6 +1091,9 @@ impl MailProvider for EwsProvider {
         let thread_limit = max_count.unwrap_or(50) as usize;
 
         let mut aqs_parts: Vec<String> = Vec::new();
+        if query.has_attachment == Some(true) {
+            aqs_parts.push("hasattachment:true".to_string());
+        }
         if let Some(from) = &query.from {
             aqs_parts.push(format!("from:{}", from));
         }
@@ -1170,24 +1189,11 @@ impl MailProvider for EwsProvider {
             rows
         }
 
-        let handles: Vec<_> = folder_id_xmls
+        let handles: Vec<_> = search_requests_xml(&folder_id_xmls, &escaped_query)
             .into_iter()
-            .map(|folder_id_xml| {
+            .map(|soap_body| {
                 let token = access_token.clone();
-                let query_escaped = escaped_query.clone();
                 tokio::spawn(async move {
-                    let soap_body = format!(
-                        r#"<m:FindItem Traversal="Shallow">
-  <m:ItemShape>
-    <t:BaseShape>AllProperties</t:BaseShape>
-    <t:AdditionalProperties><t:FieldURI FieldURI="item:Preview"/></t:AdditionalProperties>
-  </m:ItemShape>
-  <m:ParentFolderIds>
-    {folder_id_xml}
-  </m:ParentFolderIds>
-  <m:QueryString>{query_escaped}</m:QueryString>
-</m:FindItem>"#,
-                    );
                     match send(&token, &soap_body).await {
                         Ok(xml) if !xml.contains("ResponseClass=\"Error\"") => {
                             Ok(search_xml_to_rows(&xml))
@@ -3232,6 +3238,23 @@ fn xml_unescape_body(raw: &str) -> String {
 
 #[cfg(test)]
 mod outlook_schedule_tests {
+    #[test]
+    fn search_scopes_each_aqs_request_to_one_folder() {
+        let folders: Vec<String> = (0..21)
+            .map(|index| super::search_folder_xml(&format!("folder-{index}")))
+            .collect();
+        let requests = super::search_requests_xml(&folders, "hasattachment:true from:alice");
+        assert_eq!(requests.len(), folders.len());
+        for (xml, folder) in requests.iter().zip(&folders) {
+            assert_eq!(xml.matches("<t:FolderId ").count(), 1);
+            assert!(xml.contains(folder));
+            assert!(xml.contains("<m:QueryString>hasattachment:true from:alice</m:QueryString>"));
+            assert!(xml.contains("<t:BaseShape>AllProperties</t:BaseShape>"));
+            assert!(xml.contains(r#"FieldURI="item:Preview""#));
+        }
+        assert!(super::search_requests_xml(&[], "alice").is_empty());
+    }
+
     #[test]
     fn search_resolves_trash_as_distinguished_folder_and_escapes_custom_ids() {
         for folder in ["Trash", "trash", "TRASH", "deleteditems"] {

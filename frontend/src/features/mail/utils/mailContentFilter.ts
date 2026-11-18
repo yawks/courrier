@@ -1,6 +1,5 @@
 import type { MailContentRule } from '../../../shared/store/MailContentRulesStore';
 
-const APOSTROPHES = /[’‘]/g;
 const INVISIBLE = /[\u200B-\u200D\uFEFF\u00AD]/;
 const WHITESPACE = /\s/;
 
@@ -9,7 +8,7 @@ function normalized(text: string) {
   const characters: string[] = [];
   const starts: number[] = [], ends: number[] = [];
   for (let i = 0; i < text.length; i++) {
-    const char = text[i].replace(APOSTROPHES, "'").toLowerCase();
+    const char = (text[i] === '’' || text[i] === '‘' ? "'" : text[i]).toLowerCase();
     if (INVISIBLE.test(char)) continue;
     if (WHITESPACE.test(char)) {
       if (characters[characters.length - 1] === ' ') { ends[ends.length - 1] = i + 1; continue; }

@@ -31,6 +31,7 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.mocked(useMailContentRules).mockReturnValue({ rules: [], save: vi.fn() });
   document.body.replaceChildren();
@@ -86,6 +87,47 @@ describe('EmailHtmlBody links', () => {
 });
 
 describe('EmailHtmlBody regression: forwarded Gmail/Outlook message', () => {
+  it('reports slow processing with timing metadata only', async () => {
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock += 100);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<EmailHtmlBody html="<p>Private message</p>" />));
+    const entries = info.mock.calls.filter(([label]) => label === '[MailPerf]');
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [, metadata] of entries) {
+      expect(Object.keys(metadata).sort()).toEqual(['durationMs', 'instance', 'stage']);
+      expect(metadata.durationMs).toBeGreaterThanOrEqual(50);
+    }
+    expect(JSON.stringify(entries)).not.toContain('Private message');
+    await act(async () => root.unmount());
+  });
+
+  it('reuses sanitized HTML on callback rerenders and sanitizes changed content again', async () => {
+    vi.mocked(useMailContentRules).mockReturnValue({ rules: [], save: vi.fn() });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    const parse = vi.spyOn(DOMParser.prototype, 'parseFromString');
+    const html = '<p onclick="unsafe()">Bonjour<script>unsafe()</script></p>';
+    await act(async () => root.render(<EmailHtmlBody html={html} onReady={() => {}} />));
+    expect(parse).toHaveBeenCalledTimes(1);
+    const frame = host.querySelector('iframe')!;
+    const source = frame.srcdoc;
+    expect(source).not.toContain('unsafe()');
+    await act(async () => root.render(<EmailHtmlBody html={html} onReady={() => {}} />));
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('iframe')).toBe(frame);
+    expect(frame.srcdoc).toBe(source);
+    await act(async () => root.render(<EmailHtmlBody html={`${html}<p onmouseover="unsafe()">Suite</p>`} />));
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('iframe')!.srcdoc).toContain('Suite');
+    expect(host.querySelector('iframe')!.srcdoc).not.toContain('unsafe()');
+    await act(async () => root.unmount());
+  });
+
   it('processes the real-world nesting without removing its visible content', () => {
     const root = document.createElement('div');
     root.innerHTML = forwardedGmailOutlookHtml;

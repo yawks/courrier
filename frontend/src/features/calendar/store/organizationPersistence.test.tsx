@@ -6,10 +6,11 @@ import { CalendarProvider, useCalendars } from './CalendarStore';
 import { TagProvider, useTags } from './TagStore';
 import { CalendarGroupProvider, useCalendarGroups } from './CalendarGroupStore';
 import { applyPortableConfig, pickPortableConfig } from '../../../shared/security/portableConfig';
-const data = vi.hoisted(() => ({ payload: {} as Record<string, unknown>, cache: {} as Record<string, string> }));
+const data = vi.hoisted(() => ({ payload: {} as Record<string, unknown>, cache: {} as Record<string, string>, syncTags: vi.fn() }));
 vi.mock('../../../shared/security/VaultProvider', () => ({ useVault: () => ({
   read: (key: string, fallback: unknown) => data.payload[key] ?? fallback,
   write: (key: string, value: unknown) => { data.payload[key] = value; },
+  syncCalendarTags: data.syncTags,
 }) }));
 vi.mock('../utils/eventCache', () => ({ cacheGetStale: async () => data.cache,
   cacheSet: async (_key: string, value: Record<string, string>) => { data.cache = value; } }));
@@ -24,7 +25,38 @@ async function mount() {
 }
 beforeEach(() => {
   localStorage.clear(); data.payload = {}; data.cache = {};
+  data.syncTags.mockReset().mockResolvedValue(null);
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+it('applies merged remote tags without remounting or changing calendar sources', async () => {
+  data.payload['calendar-desktop-calendars'] = [{ id: 'ews', name: 'Keep EWS', type: 'exchange', visible: true }];
+  const root = await mount();
+  const before = calendars.calendars;
+  data.syncTags.mockResolvedValue({
+    'calendar-desktop-tags': [{ id: 'remote', name: 'WebDAV', color: '#123456' }],
+    'calendar-event-tags': { series: 'remote' },
+  });
+  try {
+    await act(async () => { await tags.refreshTags(); });
+    expect(tags.tags.map(tag => tag.name)).toEqual(['WebDAV']);
+    expect(tags.eventTags).toEqual({ series: 'remote' });
+    expect(calendars.calendars).toBe(before);
+    expect(tags.isSynchronizing).toBe(false);
+  } finally { await act(async () => root.unmount()); }
+});
+
+it('keeps existing tags and associations when WebDAV synchronization fails', async () => {
+  data.payload['calendar-desktop-tags'] = [{ id: 'local', name: 'Local', color: '#123456' }];
+  data.payload['calendar-event-tags'] = { series: 'local' };
+  const root = await mount();
+  data.syncTags.mockRejectedValue(new Error('offline'));
+  try {
+    await act(async () => { await expect(tags.refreshTags()).rejects.toThrow('offline'); });
+    expect(tags.tags.map(tag => tag.id)).toEqual(['local']);
+    expect(tags.eventTags).toEqual({ series: 'local' });
+    expect(tags.isSynchronizing).toBe(false);
+  } finally { await act(async () => root.unmount()); }
 });
 it('migrates existing groups, tags and mappings and restores their portable snapshot', async () => {
   localStorage.setItem('calendar-desktop-groups', '[{"id":"work","name":"Work"}]');

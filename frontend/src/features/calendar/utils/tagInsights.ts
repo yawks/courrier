@@ -16,8 +16,8 @@ export function calculateTagInsights(
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return [];
     const key = event.seriesId || event.sourceId || event.id;
     const tagId = eventTags[key] ?? event.tagId;
-    return [{ start, end, tagId }];
-  });
+    return [{ start, end, tagId, duration: Date.parse(event.end) - Date.parse(event.start) }];
+  }).sort((a, b) => b.duration - a.duration);
   const boundaries = intervals.flatMap(({ start, end }, index) => [
     { time: start, index, start: true },
     { time: end, index, start: false },
@@ -28,7 +28,7 @@ export function calculateTagInsights(
   let previousTime = boundaries[0]?.time ?? 0;
   for (const boundary of boundaries) {
     if (active.size > 0 && boundary.time > previousTime) {
-      // Input order breaks ties: each occupied slot belongs to just one event.
+      // Longest full event wins; input order only breaks equal-duration ties.
       const tagId = intervals[Math.min(...active)].tagId;
       const duration = boundary.time - previousTime;
       durations.set(tagId, (durations.get(tagId) ?? 0) + duration);

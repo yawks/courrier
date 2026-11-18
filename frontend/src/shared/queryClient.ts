@@ -15,7 +15,10 @@ let persistenceTask: Promise<void> | undefined;
  * other lightweight application queries remain eligible for persistence.
  */
 export function shouldPersistQuery(queryKey: readonly unknown[]): boolean {
-  return !(queryKey[0] === 'mail' && queryKey[2] === 'thread');
+  return !(queryKey[0] === 'mail' && queryKey[2] === 'thread')
+    // Multi-year calendars have their own durable per-calendar snapshot. Do not
+    // duplicate/dehydrate the entire history on every unrelated mail update.
+    && !(queryKey[0] === 'calendar' && queryKey[2] === 'events');
 }
 
 export const queryClient = new QueryClient({

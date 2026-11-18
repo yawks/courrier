@@ -2,11 +2,12 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { NativeDeepLinks } from './NativeDeepLinks';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(), setActiveTab: vi.fn(), reveal: vi.fn(),
-  sharePending: vi.fn(), consume: vi.fn(), invalidate: vi.fn(), exit: vi.fn(),
+  sharePending: vi.fn(), consume: vi.fn(), invalidate: vi.fn(), cancel: vi.fn(), exit: vi.fn(),
   listeners: new Map<string, (event: any) => void>(),
 }));
 vi.mock('./nativeAndroid', () => ({ androidShare: { pending: mocks.sharePending } }));
@@ -27,7 +28,7 @@ vi.mock('.', () => ({ platform: {
   revealNotificationView: mocks.reveal,
 } }));
 vi.mock('../queryClient', () => ({ queryClient: {
-  invalidateQueries: mocks.invalidate, cancelQueries: vi.fn(),
+  invalidateQueries: mocks.invalidate, cancelQueries: mocks.cancel,
 } }));
 vi.mock('../../features/mail/components/ContactAvatar', () => ({ ContactAvatar: () => null }));
 
@@ -38,6 +39,7 @@ beforeEach(async () => {
   mocks.listeners.clear();
   mocks.consume.mockResolvedValue(null);
   mocks.sharePending.mockResolvedValue(false);
+  mocks.cancel.mockResolvedValue(undefined);
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 0; });
   host = document.createElement('div');
@@ -50,9 +52,46 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('Android resume', () => {
+  it.each(['gmail', 'ews', 'imap', 'jmap'].flatMap(provider =>
+    [false, true].map(cached => ({ provider, cached })),
+  ))('replaces suspended $provider reads (cached: $cached) and ignores late results', async ({ provider, cached }) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const key = ['mail', provider, 'threads', 'inbox', 50, 0];
+    if (cached) client.setQueryData(key, ['cached-message']);
+    let finishOldRead!: (value: string[]) => void;
+    const read = vi.fn()
+      .mockImplementationOnce(() => new Promise<string[]>(resolve => { finishOldRead = resolve; }))
+      .mockResolvedValue(['new-message']);
+    // No cache: invalidateQueries alone reuses this unfinished request rather
+    // than starting a replacement, even with its default cancelRefetch option.
+    const observer = new QueryObserver(client, { queryKey: key, queryFn: read });
+    const unsubscribe = observer.subscribe(() => {});
+    const inactiveKey = ['mail', 'inactive', 'threads', 'inbox'];
+    client.setQueryData(inactiveKey, ['cached']);
+    mocks.cancel.mockImplementation(filters => client.cancelQueries(filters));
+    mocks.invalidate.mockImplementation(filters => client.invalidateQueries(filters));
+    try {
+      expect(read).toHaveBeenCalledOnce();
+      await act(async () => mocks.listeners.get('appStateChange')!({ isActive: true }));
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(client.getQueryData(key)).toEqual(['new-message']);
+      finishOldRead(['old-message']);
+      await act(async () => { await Promise.resolve(); });
+      expect(client.getQueryData(key)).toEqual(['new-message']);
+      expect(client.getQueryState(key)?.fetchStatus).toBe('idle');
+      expect(client.getQueryData(inactiveKey)).toEqual(['cached']);
+    } finally {
+      unsubscribe();
+      client.clear();
+      mocks.cancel.mockReset().mockResolvedValue(undefined);
+      mocks.invalidate.mockReset();
+    }
+  });
+
   it('keeps the preview when a previous conversation reports its body ready', async () => {
     await act(async () => mocks.listeners.get('appUrlOpen')!({ url: 'courrier://mail/account/a/conversation/b' }));
     await act(async () => globalThis.dispatchEvent(new CustomEvent('courrier:notification-opened', {
@@ -138,9 +177,51 @@ describe('Android resume', () => {
     });
     expect(mocks.reveal).toHaveBeenCalledOnce();
     expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ['mail'], refetchType: 'active' });
+    expect(mocks.cancel).toHaveBeenCalledWith({ queryKey: ['mail'], type: 'active' });
+    expect(mocks.cancel.mock.invocationCallOrder[0]).toBeLessThan(mocks.invalidate.mock.invocationCallOrder[0]);
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(mocks.setActiveTab).not.toHaveBeenCalled();
     expect(host.childElementCount).toBe(0);
+  });
+
+  it('refreshes mail even when the native notification lookup never returns', async () => {
+    mocks.consume.mockReturnValue(new Promise(() => {}));
+    await act(async () => mocks.listeners.get('appStateChange')!({ isActive: true }));
+    expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ['mail'], refetchType: 'active' });
+  });
+
+  it('refreshes mail even when the native notification lookup fails', async () => {
+    mocks.consume.mockRejectedValue(new Error('Native bridge unavailable'));
+    await act(async () => mocks.listeners.get('appStateChange')!({ isActive: true }));
+    expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ['mail'], refetchType: 'active' });
+    expect(mocks.reveal).toHaveBeenCalledOnce();
+  });
+
+  it('retires unfinished reads when connectivity returns', async () => {
+    await act(async () => { globalThis.dispatchEvent(new Event('online')); });
+    expect(mocks.cancel).toHaveBeenCalledWith({ queryKey: ['mail'], type: 'active' });
+    expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ['mail'], refetchType: 'active' });
+  });
+
+  it('refreshes on screen wake without a Capacitor resume event', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ['mail'], refetchType: 'active' });
+  });
+
+  it('coalesces screen wake and Capacitor resume without restarting twice', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      mocks.listeners.get('appStateChange')!({ isActive: true });
+      globalThis.dispatchEvent(new Event('online'));
+    });
+    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
   });
 
   it('reveals the WebView when a duplicate notification is ignored', async () => {

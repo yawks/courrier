@@ -141,7 +141,7 @@ async fn detect_imap(credentials: Value, limit: u32) -> Result<Vec<SyncMessage>,
     let config: crate::imap::ImapConfig = serde_json::from_value(credentials)
         .map_err(|_| SyncError::invalid("invalid_imap_credentials"))?;
     Ok(canonical(
-        crate::imap::imap_list_threads(config, "INBOX".into(), Some(limit), Some(0))
+        crate::imap::imap_list_threads(config, "INBOX".into(), Some(limit), Some(0), None)
             .await
             .map_err(|_| SyncError::upstream())?,
     ))

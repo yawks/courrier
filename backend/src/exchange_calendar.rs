@@ -74,6 +74,16 @@ pub struct FreeBusyRequest { anchor_mailbox: Option<String>, refresh_token: Stri
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
+pub async fn delta(Json(request): Json<app_lib::ews::CalendarDeltaRequest>) -> Result<Json<app_lib::ews::CalendarDelta>, ApiError> {
+    app_lib::ews::ews_calendar_delta(request).await.map(Json)
+        .map_err(|error| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": error }))))
+}
+
+pub async fn inventory(Json(request): Json<app_lib::ews::CalendarInventoryRequest>) -> Result<Json<app_lib::ews::CalendarInventory>, ApiError> {
+    app_lib::ews::ews_calendar_inventory(request).await.map(Json)
+        .map_err(|error| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": error }))))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomsRequest { access_token: String, query: Option<String> }

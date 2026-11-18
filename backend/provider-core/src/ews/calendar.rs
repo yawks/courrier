@@ -59,7 +59,12 @@ pub async fn ews_get_calendar_events(
         }
     };
 
-    // Batch GetItem for ALL events: fetches attendees (for meetings) and
+    hydrate_calendar_events(&access_token, anchor_mailbox, &mut events, true).await?;
+    Ok(events)
+}
+
+async fn hydrate_calendar_events(access_token: &str, anchor_mailbox: Option<&str>, events: &mut Vec<EwsEvent>, resolve_images: bool) -> Result<(), String> {
+    // Batch GetItem for changed events: fetches attendees (for meetings) and
     // CleanGlobalObjectId (same for all occurrences of a recurring series).
     let all_ids: Vec<(String, String)> = events
         .iter()
@@ -93,9 +98,10 @@ pub async fn ews_get_calendar_events(
                 eprintln!("[EWS calendar] GetItem missing_items={} requested={} (no retry)", missing.len(), chunk.len());
                 events.retain(|event| !missing.contains(&event.item_id));
             }
-            refresh_event_snapshots(&mut events, &details_xml)?;
+            refresh_event_snapshots(events, &details_xml)?;
             let mut detailed = parse_get_item_response(&details_xml);
             for detail in detailed.iter_mut() {
+                if !resolve_images { continue; }
                 let Some(mut body) = detail.body.take() else {
                     continue;
                 };
@@ -153,7 +159,133 @@ pub async fn ews_get_calendar_events(
         }
     }
 
-    Ok(events)
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarDeltaRequest {
+    pub access_token: String,
+    pub owner_email: Option<String>,
+    pub folder_id: Option<String>,
+    pub shared_mailbox: Option<String>,
+    pub sync_state: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarDelta {
+    pub sync_state: Option<String>,
+    pub changed: bool,
+    pub reset: bool,
+}
+
+fn calendar_delta_page(xml: &str) -> Result<(String, bool, bool), String> {
+    if xml.contains("ResponseClass=\"Error\"") { return Err(calendar_read_error("SyncFolderItems", xml)); }
+    let state = xml_content_ns(xml, "m:SyncState").filter(|value| !value.is_empty())
+        .ok_or("EWS calendar SyncFolderItems: MissingSyncState")?;
+    let last = match xml_content_ns(xml, "m:IncludesLastItemInRange").as_deref() {
+        Some("true") => true, Some("false") => false,
+        _ => return Err("EWS calendar SyncFolderItems: InvalidCompletionFlag".into()),
+    };
+    let changes = xml_content_ns(xml, "m:Changes").unwrap_or_default();
+    Ok((xml_decode(&state), last, !changes.trim().is_empty()))
+}
+
+/// Folder cursor is captured BEFORE reading the view: concurrent modifications
+/// are replayed by the next sync instead of being skipped.
+pub async fn ews_calendar_delta(request: CalendarDeltaRequest) -> Result<CalendarDelta, String> {
+    let mut state = request.sync_state.clone();
+    let mut changed = state.is_none();
+    let mut reset = false;
+    let parent = calendar_parent(request.folder_id.as_deref(), request.shared_mailbox.as_deref());
+    let anchor = calendar_anchor_mailbox(request.shared_mailbox.as_deref(), request.owner_email.as_deref());
+    for _ in 0..10000 {
+        let cursor = state.as_ref().map(|value| format!("<m:SyncState>{}</m:SyncState>", xml_escape(value))).unwrap_or_default();
+        let body = format!("<m:SyncFolderItems><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape><m:SyncFolderId>{parent}</m:SyncFolderId>{cursor}<m:MaxChangesReturned>512</m:MaxChangesReturned><m:SyncScope>NormalItems</m:SyncScope></m:SyncFolderItems>");
+        let xml = send_ews_request(&request.access_token, &body, anchor).await?;
+        if safe_ews_response_code(&xml) == "ErrorInvalidSyncStateData" && state.is_some() && !reset {
+            state = None; changed = true; reset = true; continue;
+        }
+        // Some shared/read-only servers support CalendarView but not folder
+        // synchronization. Use version inventories, never interpret denial as empty.
+        if matches!(safe_ews_response_code(&xml).as_str(), "ErrorAccessDenied" | "ErrorInvalidRequest" | "ErrorInvalidServerVersion" | "ErrorNotImplemented") {
+            return Ok(CalendarDelta { sync_state: None, changed: true, reset: false });
+        }
+        let (next, last, page_changed) = calendar_delta_page(&xml)?;
+        changed |= page_changed;
+        if !last && state.as_deref() == Some(next.as_str()) { return Err("EWS calendar SyncFolderItems: NonAdvancingCursor".into()); }
+        state = Some(next);
+        if last { return Ok(CalendarDelta { sync_state: state, changed, reset }); }
+    }
+    Err("EWS calendar SyncFolderItems: PaginationLimit".into())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarInventoryRequest {
+    pub access_token: String,
+    pub owner_email: Option<String>,
+    pub folder_id: Option<String>,
+    pub shared_mailbox: Option<String>,
+    pub start: String,
+    pub end: String,
+    #[serde(default)]
+    pub known_versions: std::collections::HashMap<String, String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct CalendarInventory {
+    pub events: Vec<EwsEvent>,
+    pub versions: std::collections::HashMap<String, String>,
+}
+
+fn calendar_view_complete(xml: &str) -> Result<bool, String> {
+    if xml.contains("ResponseClass=\"Error\"") { return Err(calendar_read_error("FindItem", xml)); }
+    match xml_attr(xml, "IncludesLastItemInRange").as_deref() {
+        Some("true") => Ok(true), Some("false") => Ok(false),
+        _ => Err("EWS calendar FindItem: MissingCompletionFlag".into()),
+    }
+}
+
+pub async fn ews_calendar_inventory(request: CalendarInventoryRequest) -> Result<CalendarInventory, String> {
+    let start = chrono::DateTime::parse_from_rfc3339(&request.start).map_err(|_| "Invalid EWS range")?;
+    let end = chrono::DateTime::parse_from_rfc3339(&request.end).map_err(|_| "Invalid EWS range")?;
+    if end <= start { return Err("Invalid EWS range".into()); }
+    let parent = calendar_parent(request.folder_id.as_deref(), request.shared_mailbox.as_deref());
+    let anchor = calendar_anchor_mailbox(request.shared_mailbox.as_deref(), request.owner_email.as_deref());
+    let mut windows = vec![(start, end)];
+    let mut versions = std::collections::HashMap::new();
+    let mut changed = std::collections::HashMap::new();
+    let mut requests = 0;
+    while let Some((start, end)) = windows.pop() {
+        requests += 1;
+        if requests > 10000 { return Err("EWS calendar FindItem: PaginationLimit".into()); }
+        let body = format!(r#"<m:FindItem Traversal="Shallow"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="calendar:CalendarItemType"/></t:AdditionalProperties></m:ItemShape><m:CalendarView MaxEntriesReturned="500" StartDate="{}" EndDate="{}"/><m:ParentFolderIds>{parent}</m:ParentFolderIds></m:FindItem>"#, start.to_rfc3339(), end.to_rfc3339());
+        let xml = send_ews_request(&request.access_token, &body, anchor).await?;
+        if !calendar_view_complete(&xml)? {
+            if (end - start).num_milliseconds() <= 1000 { return Err("EWS calendar FindItem: SaturatedWindow".into()); }
+            let middle = start + (end - start) / 2;
+            windows.push((middle, end)); windows.push((start, middle));
+            continue;
+        }
+        for event in parse_calendar_events(&xml)? {
+            if event.item_id.is_empty() || event.change_key.is_empty() { return Err("EWS calendar FindItem: MissingVersion".into()); }
+            versions.insert(event.item_id.clone(), event.change_key.clone());
+            if request.known_versions.get(&event.item_id) != Some(&event.change_key) {
+                changed.insert(event.item_id.clone(), event);
+            }
+        }
+    }
+    let requested: Vec<String> = changed.keys().cloned().collect();
+    let mut events: Vec<EwsEvent> = changed.into_values().collect();
+    hydrate_calendar_events(&request.access_token, anchor, &mut events, false).await?;
+    if events.iter().any(|event| event.start.is_empty() || event.end.is_empty() || event.change_key.is_empty()) {
+        return Err("EWS calendar GetItem: InvalidEventSnapshot".into());
+    }
+    for id in requested { if !events.iter().any(|event| event.item_id == id) { versions.remove(&id); } }
+    for event in &events { versions.insert(event.item_id.clone(), event.change_key.clone()); }
+    Ok(CalendarInventory { events, versions })
 }
 
 /// Read only a newly saved item, or its occurrences, without scanning the calendar.
@@ -249,6 +381,26 @@ fn calendar_detail_responses(xml: &str, requested: &[(String, String)]) -> Resul
 #[cfg(test)]
 mod calendar_detail_tests {
     use super::*;
+
+    #[test]
+    fn differential_pages_require_a_cursor_and_completion_flag_and_surface_errors() {
+        let empty = r#"<m:SyncFolderItemsResponseMessage ResponseClass="Success"><m:SyncState>next&amp;cursor</m:SyncState><m:IncludesLastItemInRange>true</m:IncludesLastItemInRange><m:Changes/></m:SyncFolderItemsResponseMessage>"#;
+        assert_eq!(calendar_delta_page(empty).unwrap(), ("next&cursor".into(), true, false));
+        let changed = empty.replace("<m:Changes/>", "<m:Changes><t:Delete><t:ItemId Id=\"removed\"/></t:Delete></m:Changes>");
+        assert!(calendar_delta_page(&changed).unwrap().2);
+        assert!(calendar_delta_page(&empty.replace("<m:SyncState>next&amp;cursor</m:SyncState>", "")).is_err());
+        assert!(calendar_delta_page(&empty.replace("<m:IncludesLastItemInRange>true</m:IncludesLastItemInRange>", "")).is_err());
+        let error = r#"<m:SyncFolderItemsResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorInvalidSyncStateData</m:ResponseCode></m:SyncFolderItemsResponseMessage>"#;
+        assert!(calendar_delta_page(error).unwrap_err().contains("ErrorInvalidSyncStateData"));
+    }
+
+    #[test]
+    fn truncated_calendar_views_are_never_mistaken_for_authoritative_empty_inventories() {
+        assert!(!calendar_view_complete(r#"<m:RootFolder IncludesLastItemInRange="false"/>"#).unwrap());
+        assert!(calendar_view_complete(r#"<m:RootFolder IncludesLastItemInRange="true"/>"#).unwrap());
+        assert!(calendar_view_complete("<m:RootFolder/>").is_err());
+        assert!(calendar_view_complete(r#"<m:FindItemResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorAccessDenied</m:ResponseCode></m:FindItemResponseMessage>"#).is_err());
+    }
 
     fn response(code: &str, body: &str) -> String {
         format!(r#"<m:GetItemResponseMessage ResponseClass="{}"><m:ResponseCode>{code}</m:ResponseCode>{body}</m:GetItemResponseMessage>"#,

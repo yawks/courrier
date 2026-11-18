@@ -5,6 +5,18 @@ import { hasNativeTransport, invokeNative } from './nativeTransport';
 vi.mock('./nativeTransport', () => ({ hasNativeTransport: vi.fn(() => false), invokeNative: vi.fn() }));
 
 describe('exchangeCalendarApi', () => {
+  it.each(['delta', 'inventory'] as const)('routes incremental %s requests through web and native transports', async operation => {
+    const request = { accessToken: 'fixture-token', syncState: 'cursor', knownVersions: { item: 'version' } };
+    const result = { syncState: 'next', changed: false };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(result)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(exchangeCalendarApi[operation](request)).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledWith(`/api/calendar/exchange/${operation}`, expect.objectContaining({ method: 'POST', body: JSON.stringify(request) }));
+    vi.mocked(hasNativeTransport).mockReturnValue(true);
+    vi.mocked(invokeNative).mockResolvedValue(result);
+    await expect(exchangeCalendarApi[operation](request)).resolves.toEqual(result);
+    expect(invokeNative).toHaveBeenCalledWith(`exchange_calendar_${operation}`, request);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

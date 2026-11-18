@@ -521,6 +521,16 @@
     "invalidToken": "Invalid token. Reconnect your Google account."
   },
   "mail": {
+    "hideReplace": "Hide replacement",
+    "findReplace": "Find and replace",
+    "replaceWith": "Replace with",
+    "replace": "Replace",
+    "replaceAll": "Replace all",
+    "findInMessage": "Find in this email",
+    "findResults": "{{current}} / {{count}} result(s)",
+    "findPrevious": "Previous result",
+    "findNext": "Next result",
+    "findClose": "Close search",
     "shareReceiveError": "Unable to read shared content. Check file access and the 25 MB total limit, then try again.",
     "office": {
       "close": "Close preview",
@@ -699,7 +709,8 @@
       "in": "In",
       "date": "Date",
       "text": "Text",
-      "hint": "Use from:, to:, cc:, bcc:, subject:, in:, date: to filter",
+      "hint": "Use from:, to:, cc:, bcc:, subject:, in:, date:, has:attachment to filter",
+      "hasAttachment": "Has an attachment",
       "inInbox": "In Inbox",
       "today": "Today"
     },

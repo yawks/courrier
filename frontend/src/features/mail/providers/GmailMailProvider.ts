@@ -982,6 +982,7 @@ export function buildGmailQuery(query: MailSearchQuery): string {
     parts.push(`subject:${sub}`);
   }
   if (query.text) parts.push(query.text);
+  if (query.hasAttachment) parts.push('has:attachment');
 
   if (query.folder) {
     // Map known folder keys to Gmail labels/in-operands

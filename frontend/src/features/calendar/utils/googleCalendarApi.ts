@@ -37,7 +37,7 @@ interface GoogleConferenceEntryPoint {
   uri: string;
 }
 
-interface GoogleEvent {
+export interface GoogleEvent {
   iCalUID?: string;
   id: string;
   summary?: string;
@@ -62,6 +62,7 @@ interface GoogleEvent {
 interface GoogleEventList {
   items: GoogleEvent[];
   nextPageToken?: string;
+  nextSyncToken?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ function mapResponseStatus(status: string): import('../../../shared/types').Atte
   return (map[status] ?? 'NEEDS-ACTION') as ReturnType<typeof mapResponseStatus>;
 }
 
-function googleEventToCalendarEvent(gEvent: GoogleEvent, cal: CalendarConfig, ownerEmail?: string): CalendarEvent | null {
+export function googleEventToCalendarEvent(gEvent: GoogleEvent, cal: CalendarConfig, ownerEmail?: string): CalendarEvent | null {
   if (!gEvent.start || !gEvent.end) return null;
   const isAllday = !gEvent.start.dateTime;
   const start = gEvent.start.dateTime ?? gEvent.start.date ?? '';
@@ -154,6 +155,47 @@ function googleEventToCalendarEvent(gEvent: GoogleEvent, cal: CalendarConfig, ow
     seriesId: gEvent.recurringEventId || gEvent.id.split('_')[0],
     isRecurringInstance: !!gEvent.recurringEventId,
   };
+}
+
+/** Unexpanded masters/exception changes: compatible with Google's syncToken rules. */
+export async function fetchGoogleCalendarChanges(token: string, cal: CalendarConfig, syncToken?: string) {
+  const items: GoogleEvent[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | undefined;
+  let nextSyncToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ singleEvents: 'false', showDeleted: 'true', maxResults: '2500',
+      ...(syncToken ? { syncToken } : {}), ...(pageToken ? { pageToken } : {}) });
+    const page = await gFetch<GoogleEventList>(token, `/calendars/${encodeURIComponent(cal.googleCalendarId ?? 'primary')}/events?${params}`, { signal: AbortSignal.timeout(30_000) });
+    items.push(...(page.items ?? []));
+    pageToken = page.nextPageToken;
+    nextSyncToken = page.nextSyncToken;
+    if (pageToken && (seen.has(pageToken) || seen.size >= 10000)) throw new Error('Google calendar: invalid pagination');
+    if (pageToken) seen.add(pageToken);
+  } while (pageToken);
+  if (!nextSyncToken) throw new Error('Google calendar: missing synchronization token');
+  return { items, syncToken: nextSyncToken };
+}
+
+export async function fetchGoogleCalendarInstances(token: string, cal: CalendarConfig, masterId: string, start: string, end: string) {
+  const events: CalendarEvent[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ timeMin: start, timeMax: end, showDeleted: 'true', maxResults: '2500',
+      ...(pageToken ? { pageToken } : {}) });
+    const page = await gFetch<GoogleEventList>(token,
+      `/calendars/${encodeURIComponent(cal.googleCalendarId ?? 'primary')}/events/${encodeURIComponent(masterId)}/instances?${params}`, { signal: AbortSignal.timeout(30_000) });
+    for (const item of page.items ?? []) {
+      if (item.status === 'cancelled') continue;
+      const event = googleEventToCalendarEvent(item, cal, cal.ownerEmail);
+      if (event) events.push(event);
+    }
+    pageToken = page.nextPageToken;
+    if (pageToken && (seen.has(pageToken) || seen.size >= 10000)) throw new Error('Google calendar: invalid pagination');
+    if (pageToken) seen.add(pageToken);
+  } while (pageToken);
+  return events;
 }
 
 // ── FreeBusy types ────────────────────────────────────────────────────────────

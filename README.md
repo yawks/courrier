@@ -4,10 +4,20 @@ A calendar and email application sharing a React interface and a Rust core acros
 
 Account credentials are not persisted on the server. They are stored in an IndexedDB vault encrypted with the user's master password.
 
-Calendar groups, their organization, tags, and event–tag associations are stored in the encrypted local vault. They are included when uploading and restoring WebDAV/Nextcloud configuration, making them available on other devices. Existing local data is migrated automatically; after making changes, upload the configuration to update the remote copy.
+Calendar groups, their organization, tags, and event–tag associations are stored in the encrypted local vault. They are included when uploading and restoring WebDAV/Nextcloud configuration, making them available on other devices. Existing local data is migrated automatically. When configuration sync is enabled, tags and event–tag associations synchronize automatically after 1.5 seconds without further tagging, grouping a batch into one synchronization. Refreshing the calendar also synchronizes them, and reopening the app or reconnecting retries pending changes. Each synchronization retrieves the remote version before merging and uploading tags, without replacing accounts or calendar sources. Local changes, including retagging and removals, are compared with the last synchronized snapshot; WebDAV wins concurrent conflicts. Other configuration changes still require uploading the configuration.
+
+### Calendar history and incremental synchronization
+
+Calendars retain a local history covering **five previous calendar years, the current year and three future years**, on web, desktop and Android. The first load can take longer; Exchange history appears progressively, starting with the current month. Subsequent refreshes reuse persistent per-calendar state: Google uses `syncToken` and reloads only changed series; Exchange/EWS uses `SyncFolderItems`, skips event reads when the folder is unchanged, and otherwise compares lightweight occurrence/version inventories before fetching changed details. Large EWS views are split to avoid the server's 500-result limit. CalDAV/Nextcloud uses `sync-collection` when supported, or compares resource ETags, downloading only changed resources. Recurrences are expanded within the retained years, including old series and their exceptions.
+
+Changes include creations, updates, moves out of the retained range and deletions. Data and synchronization state are committed together only after a complete successful refresh; failed requests or expired tokens never clear the displayed cache. Expired tokens trigger a safe rebuild. ICS subscriptions use conditional HTTP downloads (`ETag` or `Last-Modified`) when supported, otherwise download the full feed; they cannot provide event-level deltas. Shared EWS calendars restricted to availability retain their permission-checked, shorter availability view. IMAP/SMTP and JMAP do not provide calendars in Courrier. The retained history depends on data and permissions available on the server; no events are uploaded to WebDAV.
 
 
 Click a tag in the calendar sidebar’s time statistics to highlight its events and dim the others. Click it again to restore the normal view, or select another tag to switch the highlight.
+
+In an open email, **Ctrl+F** (or **Cmd+F** on macOS) opens a sticky search bar below the message header. Submit a search to highlight matches and navigate them with the previous/next arrows. **Escape** or the close button clears the search. This reader feature is shared across mail providers. While composing or editing a draft, Ctrl/Cmd+F (or Ctrl/Cmd+H) opens find and replace: replace the current match or all matches, with undo support. Search highlights are never included in the saved or sent email.
+
+Mail search accepts **has:attachment**, suggested when typing **has**, to find messages with attached files in Gmail, Exchange/EWS, JMAP and IMAP. IMAP searches the selected folder (Inbox by default); its other structured search filters remain unsupported. CalDAV/Nextcloud provides calendars, not email search.
 
 ## Event availability and privacy
 

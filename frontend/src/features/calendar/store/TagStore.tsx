@@ -1,12 +1,14 @@
-import { createContext, useContext, useReducer, useEffect, ReactNode, useState } from 'react';
+import { createContext, useContext, useReducer, useEffect, ReactNode, useState, useRef, useCallback } from 'react';
 import { useVault } from '../../../shared/security/VaultProvider';
 import { Tag, EventTagMapping } from '../../../shared/types';
 import { cacheGetStale, cacheSet } from '../utils/eventCache';
 
 const STORAGE_KEY_TAGS = 'calendar-desktop-tags';
 const STORAGE_KEY_MAPPINGS = 'calendar-event-tags';
+const TAG_SYNC_BATCH_DELAY = 1_500;
 
 type TagsAction =
+  | { type: 'INIT'; payload: Tag[] }
   | { type: 'ADD'; payload: Tag }
   | { type: 'REMOVE'; payload: string }
   | { type: 'UPDATE'; payload: { id: string; data: Partial<Tag> } };
@@ -18,6 +20,8 @@ type MappingsAction =
 
 function tagsReducer(state: Tag[], action: TagsAction): Tag[] {
   switch (action.type) {
+    case 'INIT':
+      return action.payload;
     case 'ADD':
       return [...state, action.payload];
     case 'REMOVE':
@@ -52,6 +56,8 @@ interface TagContextValue {
   setEventTag: (seriesId: string, tagId: string) => void;
   removeEventTag: (seriesId: string) => void;
   isLoaded: boolean;
+  refreshTags: () => Promise<void>;
+  isSynchronizing: boolean;
 }
 
 const TagContext = createContext<TagContextValue | null>(null);
@@ -68,6 +74,13 @@ export function TagProvider({ children }: { children: ReactNode }) {
   const [eventTags, dispatchMappings] = useReducer(mappingsReducer, {},
     () => vault.read<EventTagMapping>(STORAGE_KEY_MAPPINGS, {}));
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isSynchronizing, setIsSynchronizing] = useState(false);
+  const [localEditRevision, setLocalEditRevision] = useState(0);
+  const [syncRequest, setSyncRequest] = useState(0);
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
+  const refreshTaskRef = useRef<Promise<void> | null>(null);
+  const batchTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     if (vault.read<EventTagMapping | null>(STORAGE_KEY_MAPPINGS, null) !== null) {
@@ -96,10 +109,14 @@ export function TagProvider({ children }: { children: ReactNode }) {
     }
   }, [eventTags, isLoaded]);
 
-  const addTag = (name: string, color: string) =>
+  const noteLocalEdit = () => setLocalEditRevision(value => value + 1);
+  const addTag = (name: string, color: string) => {
     dispatchTags({ type: 'ADD', payload: { id: crypto.randomUUID(), name, color } });
+    noteLocalEdit();
+  };
 
   const removeTag = (id: string) => {
+    if (!tags.some(tag => tag.id === id)) return;
     dispatchTags({ type: 'REMOVE', payload: id });
     // Also remove any mappings associated with this tag
     Object.entries(eventTags).forEach(([seriesId, tagId]) => {
@@ -107,16 +124,73 @@ export function TagProvider({ children }: { children: ReactNode }) {
         dispatchMappings({ type: 'REMOVE', payload: seriesId });
       }
     });
+    noteLocalEdit();
   };
 
-  const updateTag = (id: string, data: Partial<Tag>) =>
+  const updateTag = (id: string, data: Partial<Tag>) => {
     dispatchTags({ type: 'UPDATE', payload: { id, data } });
+    noteLocalEdit();
+  };
 
-  const setEventTag = (seriesId: string, tagId: string) =>
+  const setEventTag = (seriesId: string, tagId: string) => {
+    if (eventTags[seriesId] === tagId) return;
     dispatchMappings({ type: 'SET', payload: { seriesId, tagId } });
+    noteLocalEdit();
+  };
 
-  const removeEventTag = (seriesId: string) =>
+  const removeEventTag = (seriesId: string) => {
+    if (!(seriesId in eventTags)) return;
     dispatchMappings({ type: 'REMOVE', payload: seriesId });
+    noteLocalEdit();
+  };
+
+  const refreshTags = useCallback(() => {
+    clearTimeout(batchTimerRef.current);
+    batchTimerRef.current = undefined;
+    if (refreshTaskRef.current) return refreshTaskRef.current;
+    setIsSynchronizing(true);
+    const task = (async () => {
+      try {
+        const merged = await vaultRef.current.syncCalendarTags?.();
+        if (!merged) return;
+        dispatchTags({ type: 'INIT', payload: merged['calendar-desktop-tags'] });
+        dispatchMappings({ type: 'INIT', payload: merged['calendar-event-tags'] });
+        // Edits made while the PUT was in flight are preserved locally and
+        // scheduled as a new batch, never marked as already uploaded.
+        if (merged.needsUpload) setSyncRequest(value => value + 1);
+      } finally {
+        setIsSynchronizing(false);
+      }
+    })();
+    refreshTaskRef.current = task;
+    void task.finally(() => { if (refreshTaskRef.current === task) refreshTaskRef.current = null; }).catch(() => {});
+    return task;
+  }, []);
+
+  const syncEnabled = !!vault.configSyncSettings?.enabled;
+  const syncSource = `${vault.configSyncSettings?.serverUrl ?? ''}|${vault.configSyncSettings?.username ?? ''}`;
+  useEffect(() => {
+    if (!isLoaded || !syncEnabled) return;
+    batchTimerRef.current = setTimeout(() => {
+      batchTimerRef.current = undefined;
+      // Failures keep the local batch. The vault exposes the sync error, and
+      // the next edit, explicit refresh, resume or reconnect retries it.
+      void refreshTags().catch(() => {});
+    }, TAG_SYNC_BATCH_DELAY);
+    return () => { clearTimeout(batchTimerRef.current); batchTimerRef.current = undefined; };
+  }, [isLoaded, syncEnabled, syncSource, localEditRevision, syncRequest, refreshTags]);
+
+  useEffect(() => {
+    if (!syncEnabled) return;
+    const retry = () => setSyncRequest(value => value + 1);
+    const visible = () => { if (document.visibilityState === 'visible') retry(); };
+    globalThis.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      globalThis.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, [syncEnabled]);
 
   return (
     <TagContext.Provider
@@ -129,6 +203,8 @@ export function TagProvider({ children }: { children: ReactNode }) {
         setEventTag,
         removeEventTag,
         isLoaded,
+        refreshTags,
+        isSynchronizing,
       }}
     >
       {children}

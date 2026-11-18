@@ -11,6 +11,7 @@ describe('portable Nextcloud configuration', () => {
       'logodev-token': 'logo-token',
       theme: 'dark',
       'courrier:config-sync-v1': { enabled: true },
+      'courrier:tag-sync-base-v1': { payload: { 'calendar-event-tags': { local: 'private-baseline' } } },
     })).toEqual({
       'calendar-desktop-imap-accounts': [{ id: 'imap' }],
       'calendar-desktop-calendars': [{ id: 'calendar' }],

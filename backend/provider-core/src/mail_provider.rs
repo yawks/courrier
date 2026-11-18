@@ -137,6 +137,8 @@ mod search_folder_tests {
 /// Structured search query forwarded from the TypeScript provider.
 #[derive(Deserialize, Debug)]
 pub struct MailSearchQuery {
+    #[serde(rename = "hasAttachment")]
+    pub has_attachment: Option<bool>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub cc: Option<String>,

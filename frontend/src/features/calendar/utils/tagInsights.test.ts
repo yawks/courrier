@@ -31,14 +31,54 @@ describe('calculateTagInsights', () => {
     expect(result).toEqual({ rows: [], totalMs: 0, untaggedMs: 0, eventCount: 0 });
   });
 
-  it('assigns overlaps to the first event and counts the remaining tail only once', () => {
+  it('assigns overlaps to the longest event regardless of input order', () => {
     const a = event('a', '10:00', '11:30', { tagId: 'A' });
     const b = event('b', '10:00', '11:00', { tagId: 'B' });
     const first = calculateTagInsights([a, b], {}, tags);
     expect(first.rows.map(r => [r.tag.id, r.durationMs])).toEqual([['A', 1.5 * hour]]);
     const reversed = calculateTagInsights([b, a], {}, tags);
-    expect(reversed.rows.map(r => [r.tag.id, r.durationMs])).toEqual([['B', hour], ['A', 0.5 * hour]]);
+    expect(reversed.rows).toEqual(first.rows);
     expect(reversed.totalMs).toBe(1.5 * hour);
+  });
+
+  it('counts only the shorter event tail outside the longer event', () => {
+    const a = event('a', '09:00', '10:30', { tagId: 'A' });
+    const b = event('b', '10:00', '11:00', { tagId: 'B' });
+    for (const events of [[a, b], [b, a]]) {
+      const result = calculateTagInsights(events, {}, tags);
+      expect(result.rows.map(r => [r.tag.id, r.durationMs])).toEqual([['A', 1.5 * hour], ['B', 0.5 * hour]]);
+      expect(result.totalMs).toBe(2 * hour);
+    }
+  });
+
+  it('allows either equal-duration event to own the overlap without tag priority', () => {
+    const a = event('a', '09:00', '10:00', { tagId: 'A' });
+    const b = event('b', '09:30', '10:30', { tagId: 'B' });
+    for (const events of [[a, b], [b, a]]) {
+      const result = calculateTagInsights(events, {}, tags);
+      expect(result.rows.map(r => [r.tag.id, r.durationMs])).toEqual([
+        [events[0].tagId, hour], [events[1].tagId, 0.5 * hour],
+      ]);
+      expect(result.totalMs).toBe(1.5 * hour);
+    }
+  });
+
+  it('compares full durations before clipping to the visible range', () => {
+    const result = calculateTagInsights([
+      event('short', '10:00', '11:30', { tagId: 'B' }),
+      event('long', '08:00', '11:00', { tagId: 'A' }),
+    ], {}, tags, { start: new Date('2026-10-12T10:00:00Z'), end: new Date('2026-10-12T11:30:00Z') });
+    expect(result.rows.map(r => [r.tag.id, r.durationMs])).toEqual([['A', hour], ['B', 0.5 * hour]]);
+    expect(result.totalMs).toBe(1.5 * hour);
+  });
+
+  it('counts nested and multiple overlaps once, including untagged events', () => {
+    const result = calculateTagInsights([
+      event('short', '10:00', '11:00', { tagId: 'A' }),
+      event('medium', '09:30', '11:30', { tagId: 'B' }),
+      event('long', '09:00', '12:00'),
+    ], {}, tags);
+    expect(result).toEqual({ rows: [], totalMs: 3 * hour, untaggedMs: 3 * hour, eventCount: 3 });
   });
 
   it('uses series, source and embedded tags, allowing the mapping to override the embedded tag', () => {

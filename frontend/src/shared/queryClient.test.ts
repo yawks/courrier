@@ -78,6 +78,9 @@ describe('shouldPersistQuery', () => {
   it('does not persist full mail conversations', () => {
     expect(shouldPersistQuery(['mail', 'account', 'thread', 'conversation-id'])).toBe(false);
   });
+  it('leaves multi-year calendar events in their dedicated cache instead of duplicating them', () => {
+    expect(shouldPersistQuery(['calendar', 'account-calendar', 'events'])).toBe(false);
+  });
 
   it('keeps lightweight mail lists and unrelated queries persistent', () => {
     expect(shouldPersistQuery(['mail', 'account', 'threads', 'inbox', 50, 0])).toBe(true);

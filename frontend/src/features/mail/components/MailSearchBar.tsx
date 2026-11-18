@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 // ── Token parsing ─────────────────────────────────────────────────────────────
 
-const TOKEN_KEYS = ['from', 'to', 'cc', 'bcc', 'subject', 'in', 'date'] as const;
+const TOKEN_KEYS = ['from', 'to', 'cc', 'bcc', 'subject', 'in', 'date', 'has'] as const;
 type TokenKey = typeof TOKEN_KEYS[number];
 
 function tokenKeyToQueryKey(key: TokenKey): keyof MailSearchQuery {
@@ -18,7 +18,7 @@ function tokenKeyToQueryKey(key: TokenKey): keyof MailSearchQuery {
   return key as keyof MailSearchQuery;
 }
 
-const TOKEN_RE = /\b(from|to|cc|bcc|subject|in|date):("([^"]*)"|([\S]+))/gi;
+const TOKEN_RE = /\b(from|to|cc|bcc|subject|in|date|has):("([^"]*)"|([\S]+))/gi;
 
 export function parseSearchInput(raw: string): MailSearchQuery {
   const query: MailSearchQuery = {};
@@ -28,9 +28,10 @@ export function parseSearchInput(raw: string): MailSearchQuery {
   while ((match = TOKEN_RE.exec(raw)) !== null) {
     const key = match[1].toLowerCase() as TokenKey;
     const value = (match[3] ?? match[4] ?? '').trim();
-    if (!value) continue;
+    if (!value || (key === 'has' && value.toLowerCase() !== 'attachment')) continue;
     remaining = remaining.replace(match[0], '');
-    (query[tokenKeyToQueryKey(key)] as string) = value;
+    if (key === 'has') query.hasAttachment = true;
+    else (query[tokenKeyToQueryKey(key)] as string) = value;
   }
   const text = remaining.trim();
   if (text) query.text = text;
@@ -56,12 +57,13 @@ function queryToString(query: MailSearchQuery): string {
   if (query.subject) parts.push(query.subject.includes(' ') ? `subject:"${query.subject}"` : `subject:${query.subject}`);
   if (query.folder)  parts.push(`in:${query.folder}`);
   if (query.date)    parts.push(`date:${query.date}`);
+  if (query.hasAttachment) parts.push('has:attachment');
   if (query.text)    parts.push(query.text);
   return parts.join(' ');
 }
 
 function isQueryEmpty(q: MailSearchQuery): boolean {
-  return !q.from && !q.to && !q.cc && !q.bcc && !q.subject && !q.folder && !q.date && !q.text;
+  return !q.from && !q.to && !q.cc && !q.bcc && !q.subject && !q.folder && !q.date && !q.hasAttachment && !q.text;
 }
 
 // ── Suggestions ───────────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ interface Suggestion {
 }
 
 const SUGGESTIONS: Suggestion[] = [
+  { id: 'attachment', labelKey: 'mail.search.hasAttachment', labelDefault: 'Has an attachment', suffix: '', insert: 'has:attachment ', isDefault: true },
   { id: 'inbox', labelKey: 'mail.search.inInbox', labelDefault: 'In Inbox', suffix: '',  insert: 'in:inbox ',   isDefault: true },
   { id: 'today', labelKey: 'mail.search.today',   labelDefault: 'Today',    suffix: '',  insert: 'date:today ', isDefault: true },
   { id: 'to',    labelKey: 'mail.search.to',       labelDefault: 'To',      suffix: ':', insert: 'to:',         isDefault: true },

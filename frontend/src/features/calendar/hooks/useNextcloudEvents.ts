@@ -47,7 +47,8 @@ export function useNextcloudEvents(calendars: CalendarConfig[], onLoaded?: (id: 
     }))).flat().filter(Boolean) as CalendarEvent[];
     if (stale.length > 0) setEvents(current => [
       ...stale.filter(event => creationVersions.current.get(event.calendarId) === versions.get(event.calendarId)),
-      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)),
+      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)
+        || !stale.some(cached => cached.calendarId === event.calendarId)),
     ]);
     setReadOnlyCalendarIds([...readOnlyIds]);
 
@@ -81,7 +82,8 @@ export function useNextcloudEvents(calendars: CalendarConfig[], onLoaded?: (id: 
         results.push(...result.value);
       } else {
         newErrors[toRefresh[i].id] = calDavLoadError(result.reason);
-        results.push(...stale.filter(event => event.calendarId === toRefresh[i].id));
+        const previous = eventsRef.current.filter(event => event.calendarId === toRefresh[i].id);
+        results.push(...(previous.length ? previous : stale.filter(event => event.calendarId === toRefresh[i].id)));
       }
     });
 

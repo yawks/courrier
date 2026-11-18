@@ -1686,6 +1686,9 @@ impl MailProvider for JmapProvider {
         let count = max_count.unwrap_or(50);
 
         let mut filters: Vec<EmailFilter> = Vec::new();
+        if query.has_attachment == Some(true) {
+            filters.push(EmailFilter::has_attachment(true));
+        }
         if let Some(folder) = &query.folder {
             let folder_ids = get_folder_ids(&self.state, &client, &self.config).await?;
             let key = search_folder_key(folder);

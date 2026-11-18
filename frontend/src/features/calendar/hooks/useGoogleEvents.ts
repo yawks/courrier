@@ -2,7 +2,9 @@ import { AttendeeStatus, CalendarConfig, CalendarEvent } from '../../../shared/t
 import { cacheGetStale, cacheIsFresh, cacheSet, patchCachedEventRsvp, mergeCreatedEvents } from '../utils/eventCache';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getCreatedGoogleEvent, listEvents } from '../utils/googleCalendarApi';
+import { getCreatedGoogleEvent } from '../utils/googleCalendarApi';
+import { synchronizeGoogleCalendar } from '../utils/googleCalendarSync';
+import { calendarSyncCacheKey } from '../utils/calendarSync';
 import { useGoogleAuth } from '../../../shared/store/GoogleAuthStore';
 
 const CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -10,16 +12,6 @@ const CACHE_VERSION = 'g1';
 
 function cacheKey(calId: string) {
   return `google-events:${CACHE_VERSION}:${calId}`;
-}
-
-// Date window: 52 weeks past, 104 weeks future
-function getDateRange() {
-  const now = new Date();
-  const timeMin = new Date(now);
-  timeMin.setDate(timeMin.getDate() - 52 * 7);
-  const timeMax = new Date(now);
-  timeMax.setDate(timeMax.getDate() + 104 * 7);
-  return { timeMin, timeMax };
 }
 
 export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: string, events: CalendarEvent[]) => void) {
@@ -54,7 +46,8 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
     }))).flat().filter(Boolean) as CalendarEvent[];
     if (stale.length > 0) setEvents(current => [
       ...stale.filter(event => creationVersions.current.get(event.calendarId) === versions.get(event.calendarId)),
-      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)),
+      ...current.filter(event => creationVersions.current.get(event.calendarId) !== versions.get(event.calendarId)
+        || !stale.some(cached => cached.calendarId === event.calendarId)),
     ]);
 
     // Phase 2: refresh expired / forced caches
@@ -66,13 +59,12 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
 
     setLoading(true);
     const newErrors: Record<string, string> = {};
-    const { timeMin, timeMax } = getDateRange();
 
     const settled = await Promise.allSettled(
       toRefresh.map(async (cal) => {
         const token = await getValidToken(cal.googleAccountId!);
         if (!token) throw new Error('Token invalide ou expiré. Reconnectez votre compte Google.');
-        const fetched = await listEvents(token, cal, timeMin, timeMax);
+        const fetched = await synchronizeGoogleCalendar(token, cal);
         if (creationVersions.current.get(cal.id) !== versions.get(cal.id)) return eventsRef.current.filter(event => event.calendarId === cal.id);
         await cacheSet(cacheKey(cal.id), fetched);
         if (creationVersions.current.get(cal.id) === versions.get(cal.id)) onLoadedRef.current?.(cal.id, fetched);
@@ -88,6 +80,8 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
         results.push(...result.value);
       } else {
         newErrors[toRefresh[i].id] = result.reason?.message ?? 'Erreur inconnue';
+        const previous = eventsRef.current.filter(event => event.calendarId === toRefresh[i].id);
+        results.push(...(previous.length ? previous : stale.filter(event => event.calendarId === toRefresh[i].id)));
       }
     });
 
@@ -143,5 +137,8 @@ export function useGoogleEvents(calendars: CalendarConfig[], onLoaded?: (id: str
 
 /** Patch a single Google event's RSVP status in the IndexedDB cache. */
 export function patchGoogleCachedRsvp(calId: string, eventId: string, status: AttendeeStatus): Promise<void> {
-  return patchCachedEventRsvp(`google-events:${CACHE_VERSION}:${calId}`, eventId, status);
+  return Promise.all([
+    patchCachedEventRsvp(`google-events:${CACHE_VERSION}:${calId}`, eventId, status),
+    patchCachedEventRsvp(calendarSyncCacheKey('google', calId), eventId, status),
+  ]).then(() => {});
 }

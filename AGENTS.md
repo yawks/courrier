@@ -9,6 +9,14 @@ Ce fichier s’applique à tout le dépôt. Toute modification d’interface doi
 - Avant de modifier une action, identifier ses implémentations dans chaque provider et appliquer le changement à toutes celles qui la prennent en charge. Une correction ou une fonctionnalité ne doit pas rester limitée au seul provider ayant servi à la développer.
 - Vérifier le comportement et les erreurs pour chaque provider concerné, et préciser dans le compte rendu les validations effectuées et celles qui n’ont pas pu l’être. Si une action ne s’applique pas à un provider ou n’est pas prise en charge par son protocole, documenter explicitement cette limite.
 
+## Calcul des temps dans Tags and insights
+
+- Ne comptabiliser que les évènements acceptés (y compris les évènements personnels sans RSVP). Exclure les réunions provisoires, refusées, en attente ou annulées, ainsi que les tâches, les journées entières et les copies de calendriers partagés.
+- Chaque instant occupé est compté une seule fois, même lorsque plusieurs évènements se chevauchent. Attribuer le chevauchement au tag de l’évènement dont la durée complète est la plus longue, avant découpage selon la période affichée. Cette règle vaut aussi pour les évènements sans tag et les chevauchements multiples.
+- À durée égale, l’un ou l’autre évènement peut recevoir le chevauchement, sans priorité entre tags. Les parties sans chevauchement restent attribuées à leur propre évènement.
+- Exemples : A de 9h à 10h30 et B de 10h à 11h donnent A = 1h30 et B = 30 min. A de 9h à 10h et B de 9h30 à 10h30 donnent A = 1h et B = 30 min, ou A = 30 min et B = 1h.
+- Conserver ce calcul dans le code partagé entre web, Tauri et Android, indépendamment du provider, et couvrir ces règles par des tests.
+
 ## Documentation des fonctionnalités
 
 - Toute nouvelle fonctionnalité suffisamment conséquente pour apporter une nouvelle capacité ou un nouvel usage à l’utilisateur doit être mentionnée dans `README.md`, dans la section pertinente et avec un niveau de détail proportionné à son intérêt.

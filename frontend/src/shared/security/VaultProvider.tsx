@@ -10,6 +10,7 @@ import { platform } from '../platform';
 import { getTauriInvoke } from '../platform/tauriRuntime';
 import { ConfigSyncConflictError, decodeConfigInvitation, encodeConfigInvitation, fetchRemoteVault, NextcloudConfigLocation, putRemoteVault, RemoteVaultDocument } from '../api/configSyncApi';
 import { applyPortableConfig, PORTABLE_CONFIG_KEYS, isPortableConfigKey, pickPortableConfig, PortableConfigSummary, portableConfigSummary, portableValuesEqual } from './portableConfig';
+import { matchingTagSyncBaseline, mergeCalendarTags, synchronizeCalendarTags, tagSyncBaseline, TAG_CONFIG_KEYS, TAG_SYNC_BASE_KEY, type TagSyncBaseline } from './calendarTagSync';
 const DB_KEY = 'courrier-encrypted-vault-v1';
 const ITERATIONS = 600_000;
 const LOCK_AFTER_MS = 30 * 60 * 1000;
@@ -26,6 +27,7 @@ const LEGACY_KEYS = [
 ] as const;
 
 type VaultPayload = Record<string, unknown>;
+type CalendarTagSyncResult = ReturnType<typeof mergeCalendarTags> & { needsUpload: boolean };
 type ConfigSyncStatus = 'disabled' | 'idle' | 'syncing' | 'synced' | 'conflict' | 'error';
 interface ConfigSyncSettings extends NextcloudConfigLocation { enabled: boolean; etag?: string; revision: number; dirty?: boolean }
 interface ConfigSyncSummary { direction: 'uploaded' | 'downloaded'; revision: number; contents: PortableConfigSummary }
@@ -87,6 +89,7 @@ interface VaultContextValue {
   configSyncSummary: ConfigSyncSummary | null;
   disableConfigSync(): void;
   resolveConfigSyncConflict(strategy: 'local' | 'remote'): Promise<void>;
+  syncCalendarTags(): Promise<CalendarTagSyncResult | null>;
 }
 
 const VaultContext = createContext<VaultContextValue | null>(null);
@@ -205,6 +208,7 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
   const payloadRef = useRef<VaultPayload>({});
   const writeQueue = useRef(Promise.resolve());
   const remoteCheckRef = useRef('');
+  const tagSyncRef = useRef<Promise<CalendarTagSyncResult | null> | null>(null);
   const lock = useCallback(() => {
     keyRef.current = null;
     payloadRef.current = {};
@@ -327,7 +331,7 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
       const syncKey = await importVaultKey(recoveryKeyToBytes(location.recoveryKey));
       const remotePayload = await decryptVaultWithKey<VaultPayload>(remote.document.vault, syncKey);
       const sync: ConfigSyncSettings = { ...location, recoveryKey: location.recoveryKey.trim(), enabled: true, etag: remote.etag, revision: remote.document.revision, dirty: false };
-      const nextPayload = { ...pickPortableConfig(remotePayload), [CONFIG_SYNC_KEY]: sync };
+      const nextPayload = { ...pickPortableConfig(remotePayload), [CONFIG_SYNC_KEY]: sync, [TAG_SYNC_BASE_KEY]: tagSyncBaseline(sync, remotePayload) };
       const salt = crypto.getRandomValues(new Uint8Array(16));
       const localKey = await deriveVaultKey(password, salt, ITERATIONS);
       const localVault = await encryptVaultWithKey(nextPayload, localKey, salt, ITERATIONS);
@@ -365,8 +369,8 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
       await putRemoteVault(location, document, expectedEtag);
       const confirmed = await fetchRemoteVault(location);
       const sync: ConfigSyncSettings = { ...location, recoveryKey, enabled: true, etag: confirmed.etag, revision: document.revision, dirty: false };
-      const next = { ...payloadRef.current, [CONFIG_SYNC_KEY]: sync };
-      payloadRef.current = next; setPayload(next); setConfigSyncSettings(sync); persist(next, [CONFIG_SYNC_KEY]);
+      const next = { ...payloadRef.current, [CONFIG_SYNC_KEY]: sync, [TAG_SYNC_BASE_KEY]: tagSyncBaseline(sync, portable) };
+      payloadRef.current = next; setPayload(next); setConfigSyncSettings(sync); persist(next, [CONFIG_SYNC_KEY, TAG_SYNC_BASE_KEY]);
       setConfigSyncSummary({ direction: 'uploaded', revision: document.revision, contents });
       setConfigSyncStatus('synced');
     } catch (cause) {
@@ -401,11 +405,11 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
     const remotePayload = await decryptVaultWithKey<VaultPayload>(remote.document.vault, await importVaultKey(recoveryKeyToBytes(sync.recoveryKey)));
     setConfigSyncSummary({ direction: 'downloaded', revision: remote.document.revision, contents: portableConfigSummary(remotePayload) });
     const nextSync: ConfigSyncSettings = { ...sync, etag: remote.etag, revision: remote.document.revision, dirty: false };
-    const next = { ...applyPortableConfig(payloadRef.current, remotePayload), [CONFIG_SYNC_KEY]: nextSync };
+    const next = { ...applyPortableConfig(payloadRef.current, remotePayload), [CONFIG_SYNC_KEY]: nextSync, [TAG_SYNC_BASE_KEY]: tagSyncBaseline(nextSync, remotePayload) };
     // Remount consumers in the same React update as the payload replacement.
     // Otherwise their persistence effects can write stale local state back first.
     resetMailNavigationAfterConfigReplacement();
-    payloadRef.current = next; setPayload(next); setConfigSyncSettings(nextSync); setContentRevision(revision => revision + 1); persist(next, [...PORTABLE_CONFIG_KEYS, CONFIG_SYNC_KEY]); setConfigSyncStatus('synced');
+    payloadRef.current = next; setPayload(next); setConfigSyncSettings(nextSync); setContentRevision(revision => revision + 1); persist(next, [...PORTABLE_CONFIG_KEYS, CONFIG_SYNC_KEY, TAG_SYNC_BASE_KEY]); setConfigSyncStatus('synced');
     await writeQueue.current;
   }, [persist]);
 
@@ -415,6 +419,55 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
     if (strategy === 'local') { await pushConfiguration(sync, sync.etag, sync.revision, true); return; }
     await restoreFromNextcloud(sync);
   }, [configSyncSettings, pushConfiguration, restoreFromNextcloud]);
+
+  const syncCalendarTags = useCallback(() => {
+    if (tagSyncRef.current) return tagSyncRef.current;
+    const sync = payloadRef.current[CONFIG_SYNC_KEY] as ConfigSyncSettings | undefined;
+    const key = keyRef.current;
+    if (!sync?.enabled || !sync.recoveryKey || !key || !stored) return Promise.resolve(null);
+    const task = (async () => {
+      setConfigSyncStatus('syncing');
+      try {
+        const syncKey = await importVaultKey(recoveryKeyToBytes(sync.recoveryKey!));
+        const base = matchingTagSyncBaseline(sync, payloadRef.current[TAG_SYNC_BASE_KEY] as TagSyncBaseline | undefined);
+        const readLocal = () => {
+          const current = payloadRef.current[CONFIG_SYNC_KEY] as ConfigSyncSettings | undefined;
+          if (keyRef.current !== key || !current?.enabled || current.recoveryKey !== sync.recoveryKey
+            || current.serverUrl !== sync.serverUrl || current.username !== sync.username) {
+            throw new Error('Configuration synchronization is no longer active');
+          }
+          return payloadRef.current;
+        };
+        const result = await synchronizeCalendarTags(sync, syncKey, readLocal, deviceId(), stored.kdf.iterations, base);
+        const activeSync = payloadRef.current[CONFIG_SYNC_KEY] as ConfigSyncSettings | undefined;
+        if (keyRef.current !== key || !activeSync?.enabled || activeSync.recoveryKey !== sync.recoveryKey
+          || activeSync.serverUrl !== sync.serverUrl || activeSync.username !== sync.username) return null;
+        if (!result) { setConfigSyncStatus('idle'); return null; }
+        // Keep edits made during the request, without remounting calendars or
+        // replacing local sources with another device's configuration.
+        const tags = mergeCalendarTags(payloadRef.current, result.payload, result.localSnapshot);
+        const needsUpload = TAG_CONFIG_KEYS.some(field => !portableValuesEqual(field, tags[field], result.payload[field]));
+        const next: VaultPayload = { ...payloadRef.current, ...tags };
+        const dirty = PORTABLE_CONFIG_KEYS.some(field => !portableValuesEqual(field, next[field], result.payload[field]));
+        const nextSync: ConfigSyncSettings = { ...activeSync, etag: result.etag, revision: result.revision, dirty };
+        const updated = { ...next, [CONFIG_SYNC_KEY]: nextSync, [TAG_SYNC_BASE_KEY]: tagSyncBaseline(sync, result.payload) };
+        payloadRef.current = updated; setPayload(updated); setConfigSyncSettings(nextSync);
+        persist(updated, [...TAG_CONFIG_KEYS, CONFIG_SYNC_KEY, TAG_SYNC_BASE_KEY]);
+        setConfigSyncStatus(dirty ? 'conflict' : 'synced');
+        return { ...tags, needsUpload };
+      } catch (cause) {
+        const current = payloadRef.current[CONFIG_SYNC_KEY] as ConfigSyncSettings | undefined;
+        if (keyRef.current === key && current?.enabled && current.recoveryKey === sync.recoveryKey
+          && current.serverUrl === sync.serverUrl && current.username === sync.username) {
+          setConfigSyncStatus(cause instanceof ConfigSyncConflictError ? 'conflict' : 'error');
+        }
+        throw cause;
+      }
+    })();
+    tagSyncRef.current = task;
+    void task.finally(() => { if (tagSyncRef.current === task) tagSyncRef.current = null; }).catch(() => {});
+    return task;
+  }, [persist, stored]);
 
   useEffect(() => {
     const sync = configSyncSettings;
@@ -495,8 +548,8 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
     payloadRef.current = next;
     setPayload(next);
     persist(next, activeSync?.enabled && portableChanged ? [key, CONFIG_SYNC_KEY] : [key]);
-    // Uploads are deliberately manual: background writes must never overwrite
-    // another device's configuration.
+    // Full configuration uploads remain manual. TagProvider synchronizes only
+    // tags separately, with a remote read, three-way merge and version check.
   }, [configSyncSettings, configSyncStatus, persist, pushConfiguration]);
 
   const configSyncInvitation = useMemo(() => configSyncSettings ? encodeConfigInvitation(configSyncSettings) : null, [configSyncSettings]);
@@ -514,7 +567,8 @@ export function VaultProvider({ children }: Readonly<{ children: ReactNode }>) {
     configSyncSummary,
     disableConfigSync,
     resolveConfigSyncConflict,
-  }), [read, write, lock, biometricAvailable, biometricEnabled, enableBiometrics, disableBiometrics, backupToNextcloud, restoreFromNextcloud, configSyncSettings, configSyncStatus, configSyncInvitation, configSyncSummary, disableConfigSync, resolveConfigSyncConflict]);
+    syncCalendarTags,
+  }), [read, write, lock, biometricAvailable, biometricEnabled, enableBiometrics, disableBiometrics, backupToNextcloud, restoreFromNextcloud, configSyncSettings, configSyncStatus, configSyncInvitation, configSyncSummary, disableConfigSync, resolveConfigSyncConflict, syncCalendarTags]);
 
   if (stored === undefined || !desktopSessionChecked) return <VaultLoading />;
   if (!payload) return <VaultScreen exists={stored !== null} busy={busy} error={error} biometricEnabled={biometricEnabled} onSubmit={submit} onBiometricUnlock={biometricUnlock} onRestore={restore} />;

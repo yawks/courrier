@@ -23,6 +23,10 @@ it('resolves the IMAP trash alias to the discovered trash folder', async () => {
   ]);
   await provider.listFolders();
   mailCommand.mockResolvedValueOnce([]);
-  await provider.searchThreads({ folder: 'Trash', text: 'Luiz' });
-  expect(mailCommand).toHaveBeenLastCalledWith('imap_list_threads', expect.objectContaining({ folder: 'Deleted Messages' }));
+  await provider.searchThreads({ folder: 'Trash', text: 'Luiz', hasAttachment: true });
+  expect(mailCommand).toHaveBeenLastCalledWith('imap_list_threads', expect.objectContaining({ folder: 'Deleted Messages', hasAttachment: true }));
+});
+
+it('translates the attachment filter to Gmail syntax', () => {
+  expect(buildGmailQuery({ hasAttachment: true, from: 'alice' })).toBe('from:alice has:attachment');
 });

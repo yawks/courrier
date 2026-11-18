@@ -33,6 +33,7 @@ pub struct ImapProvider {
     config: ImapConfig,
     folder: Option<String>,
     load_bodies: bool,
+    attachments_only: bool,
 }
 
 impl ImapProvider {
@@ -41,6 +42,7 @@ impl ImapProvider {
             config,
             folder: None,
             load_bodies: false,
+            attachments_only: false,
         }
     }
     pub fn with_folder(config: ImapConfig, folder: String) -> Self {
@@ -48,6 +50,7 @@ impl ImapProvider {
             config,
             folder: Some(folder),
             load_bodies: false,
+            attachments_only: false,
         }
     }
     pub fn with_folder_and_bodies(config: ImapConfig, folder: String) -> Self {
@@ -55,6 +58,7 @@ impl ImapProvider {
             config,
             folder: Some(folder),
             load_bodies: true,
+            attachments_only: false,
         }
     }
 }
@@ -689,6 +693,28 @@ impl MailProvider for ImapProvider {
         let mut ids: Vec<u32> = search_results.into_iter().collect();
         ids.sort_by(|a, b| b.cmp(a));
 
+        // Inspect MIME structure in bounded batches; never download file contents.
+        if self.attachments_only {
+            let mut matching = Vec::new();
+            for batch in ids.chunks(150) {
+                let sequence = batch.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+                let mut fetches = session.fetch(sequence, "(BODYSTRUCTURE)").await
+                    .map_err(|e| format!("IMAP attachment search error: {e}"))?;
+                while let Some(fetch) = fetches.next().await {
+                    let fetch = fetch.map_err(|e| format!("IMAP attachment search error: {e}"))?;
+                    if let Some(body) = fetch.bodystructure() {
+                        let mut attachments = Vec::new();
+                        collect_attachments_from_bs(body, &[], folder, &fetch.message.to_string(), &mut attachments);
+                        if attachments.iter().any(|attachment| !attachment.is_inline) {
+                            matching.push(fetch.message);
+                        }
+                    }
+                }
+                if matching.len() >= (count as usize).saturating_mul(3) { break; }
+            }
+            matching.sort_by(|a, b| b.cmp(a));
+            ids = matching;
+        }
         let fetch_limit = ((count * 3) as usize).min(ids.len());
         if fetch_limit == 0 {
             return Ok(vec![]);
@@ -887,7 +913,7 @@ impl MailProvider for ImapProvider {
                     unread_count,
                     from_name: newest.from_name.clone(),
                     from_email: newest.from_email.clone(),
-                    has_attachments: false,
+                    has_attachments: self.attachments_only,
                     to_recipients: newest.to_recipients.clone(),
                     cc_recipients: newest.cc_recipients.clone(),
                     unique_senders,
@@ -1458,10 +1484,13 @@ pub async fn imap_list_threads(
     folder: String,
     max_count: Option<u32>,
     offset: Option<u32>,
+    has_attachment: Option<bool>,
 ) -> Result<Vec<MailThread>, String> {
     let offset = offset.unwrap_or(0);
     let count = max_count.unwrap_or(50);
-    let threads = ImapProvider::new(config)
+    let mut provider = ImapProvider::new(config);
+    provider.attachments_only = has_attachment.unwrap_or(false);
+    let threads = provider
         .list_threads(&folder, Some(count.saturating_add(offset)))
         .await?;
     Ok(threads
@@ -1656,6 +1685,27 @@ pub async fn imap_get_attachment_data(
 #[cfg(test)]
 mod tests {
     use super::{decode_body_section, BodySection};
+
+    #[test]
+    fn attachment_search_recognizes_files_without_fetching_contents() {
+        use async_imap::imap_proto::{parser::parse_response, types::{AttributeValue, Response}};
+        for (structure, expected) in [
+            (r#"("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "7BIT" 12 1)"#, false),
+            (r#"("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "BASE64" 120 NIL ("ATTACHMENT" ("FILENAME" "report.pdf")))"#, true),
+            (r#"("IMAGE" "PNG" NIL NIL NIL "BASE64" 120 NIL ("INLINE" ("FILENAME" "logo.png")))"#, false),
+        ] {
+            let wire = format!("* 1 FETCH (BODYSTRUCTURE {structure})\r\n");
+            let (_, response) = parse_response(wire.as_bytes()).unwrap();
+            let Response::Fetch(_, attributes) = response else { panic!("expected FETCH") };
+            let body = attributes.iter().find_map(|attribute| match attribute {
+                AttributeValue::BodyStructure(body) => Some(body),
+                _ => None,
+            }).unwrap();
+            let mut attachments = Vec::new();
+            super::collect_attachments_from_bs(body, &[], "INBOX", "1", &mut attachments);
+            assert_eq!(attachments.iter().any(|attachment| !attachment.is_inline), expected);
+        }
+    }
 
     #[test]
     fn decodes_quoted_printable_html_body_section() {

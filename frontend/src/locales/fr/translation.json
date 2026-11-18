@@ -521,6 +521,16 @@
     "invalidToken": "Token invalide. Reconnectez votre compte Google."
   },
   "mail": {
+    "hideReplace": "Masquer le remplacement",
+    "findReplace": "Rechercher et remplacer",
+    "replaceWith": "Remplacer par",
+    "replace": "Remplacer",
+    "replaceAll": "Tout remplacer",
+    "findInMessage": "Rechercher dans ce mail",
+    "findResults": "{{current}} / {{count}} résultat(s)",
+    "findPrevious": "Résultat précédent",
+    "findNext": "Résultat suivant",
+    "findClose": "Fermer la recherche",
     "shareReceiveError": "Impossible de lire le partage. Vérifiez l’accès aux fichiers et la limite totale de 25 Mo, puis réessayez.",
     "office": {
       "close": "Fermer l’aperçu",
@@ -699,7 +709,8 @@
       "in": "Dans",
       "date": "Date",
       "text": "Texte",
-      "hint": "Utilisez from:, to:, cc:, bcc:, subject:, in:, date: pour filtrer",
+      "hint": "Utilisez from:, to:, cc:, bcc:, subject:, in:, date:, has:attachment pour filtrer",
+      "hasAttachment": "Contient une pièce jointe",
       "inInbox": "Dans la boîte de réception",
       "today": "Aujourd'hui"
     },

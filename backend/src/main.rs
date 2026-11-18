@@ -76,6 +76,8 @@ async fn main() {
         .route("/calendar/exchange/rooms", post(exchange_calendar::rooms))
         .route("/calendar/exchange/get", post(exchange_calendar::get))
         .route("/calendar/exchange/list", post(exchange_calendar::list))
+        .route("/calendar/exchange/delta", post(exchange_calendar::delta))
+        .route("/calendar/exchange/inventory", post(exchange_calendar::inventory))
         .route("/calendar/exchange/free-busy", post(exchange_calendar::free_busy))
         .route("/calendar/exchange/recurrence", post(exchange_calendar::recurrence))
         .route("/calendar/exchange/update", post(exchange_calendar::update))

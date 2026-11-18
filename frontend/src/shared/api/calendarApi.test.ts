@@ -18,6 +18,13 @@ describe('calendarApi', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'provider_host_not_allowed' }), { status: 403 })));
     await expect(calendarApi.fetchIcs('https://attacker.example/feed.ics')).rejects.toThrow('provider_host_not_allowed');
   });
+
+  it('preserves conditional feed validators and a not-modified result', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ notModified: true, etag: '"v1"' })));
+    vi.stubGlobal('fetch', fetch);
+    await expect(calendarApi.fetchIcsResource('https://calendar.example/feed', '"v1"', 'yesterday')).resolves.toEqual({ notModified: true, etag: '"v1"' });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ url: 'https://calendar.example/feed', etag: '"v1"', lastModified: 'yesterday' });
+  });
 });
 
 it('passes create-only protection to the web CalDAV adapter', async () => {

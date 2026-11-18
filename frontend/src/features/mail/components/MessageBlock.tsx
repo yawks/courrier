@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MailMessage, MailAttachment } from '../types';
 import { MessageBlockHeader } from './MessageBlockHeader';
+import { MailMessageSearch } from './MailMessageSearch';
 import { EmailHtmlBody } from './EmailHtmlBody';
 import { AttachmentList } from './AttachmentList';
 import { ICSInvitationCard } from './ICSInvitationCard';
@@ -259,6 +260,8 @@ export function MessageBlock({
         onToggleRead={onToggleRead}
         provider={provider}
       />
+
+      {isExpanded && <MailMessageSearch key={message.item_id} blockRef={blockRef} />}
 
       {isExpanded && scheduledQuery.data && !scheduledCanceled && (() => {
         const scheduledDate = new Date(scheduledQuery.data.scheduledAt);

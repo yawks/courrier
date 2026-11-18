@@ -131,6 +131,7 @@ export type ThreadFilter = 'all' | 'unread';
  * (Gmail q-parameter, EWS AQS QueryString, etc.).
  */
 export interface MailSearchQuery {
+  hasAttachment?: boolean;
   /** Free-text search (matches subject and body). */
   text?: string;
   /** Filter by sender email or name. */

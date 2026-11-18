@@ -1,3 +1,5 @@
+import { EditorSearch } from '../utils/editorSearch';
+import { MailEditorSearch } from './MailEditorSearch';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useEditor, EditorContent, Editor, ReactNodeViewRenderer, NodeViewWrapper, NodeViewProps } from '@tiptap/react';
@@ -441,6 +443,7 @@ export const MailEditor = forwardRef<MailEditorHandle, MailEditorProps>(
     const editor = useEditor({
       extensions: [
         StarterKit,
+        EditorSearch,
         Underline,
         TextStyle,
         FontSize,
@@ -543,7 +546,7 @@ export const MailEditor = forwardRef<MailEditorHandle, MailEditorProps>(
 
     return (
       <div className="mail-editor">
-        <FormattingToolbar editor={editor} />
+        {editor && <MailEditorSearch editor={editor}><FormattingToolbar editor={editor} /></MailEditorSearch>}
         <EditorContent editor={editor} className="mail-editor__content" />
       </div>
     );

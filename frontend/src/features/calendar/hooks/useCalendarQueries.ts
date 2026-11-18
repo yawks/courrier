@@ -1,9 +1,12 @@
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { CalendarConfig, CalendarEvent } from '../../../shared/types';
 import { useExchangeAuth } from '../../../shared/store/ExchangeAuthStore';
 import i18n from '../../../i18n';
 import { useEffect, useMemo } from 'react';
 import { exchangeCalendarApi } from '../../../shared/api/exchangeCalendarApi';
+import { cacheGetStale, cacheSet } from '../utils/eventCache';
+import { synchronizeEwsCalendar } from '../utils/ewsCalendarSync';
+import { calendarSourceFingerprint, calendarSyncCacheKey } from '../utils/calendarSync';
 
 export const CALENDAR_KEYS = {
   all: ['calendar'] as const,
@@ -139,15 +142,49 @@ export async function fetchEWSItem(cal: CalendarConfig, accessToken: string, ite
 // --- MAIN HOOK ---
 export function useCalendarEvents(calendars: CalendarConfig[], onLoaded?: (id: string, events: CalendarEvent[]) => void) {
   const { getValidToken: getEwsToken } = useExchangeAuth();
+  const queryClient = useQueryClient();
 
   const results = useQueries({
     queries: calendars.map(cal => ({
       queryKey: CALENDAR_KEYS.events(cal.id),
-      queryFn: async () => {
+      queryFn: async ({ signal }: { signal: AbortSignal }) => {
         if (cal.type === 'exchange') {
+          const cacheKey = `ews-events:ews1:${cal.id}`;
+          if (queryClient.getQueryData(CALENDAR_KEYS.events(cal.id)) === undefined) {
+            let cached = await cacheGetStale<CalendarEvent[]>(cacheKey);
+            if (!cached) {
+              const durable = await cacheGetStale<{ source: string; events: CalendarEvent[] }>(calendarSyncCacheKey('exchange', cal.id));
+              if (durable?.source === await calendarSourceFingerprint(cal) && Array.isArray(durable.events)) cached = durable.events;
+            }
+            if (signal.aborted) throw signal.reason;
+            // Seed the query before fetching, so errors remain errors while
+            // the last successful snapshot stays visible, even after GC/restart.
+            if (cached && queryClient.getQueryData(CALENDAR_KEYS.events(cal.id)) === undefined) {
+              queryClient.setQueryData(CALENDAR_KEYS.events(cal.id), cached, { updatedAt: 1 });
+            }
+          }
           const token = await getEwsToken(cal.exchangeAccountId!);
           if (!token) throw new Error('Unauthorized');
-          return await fetchEWSEvents(cal, token);
+          let events: CalendarEvent[];
+          try {
+            events = await synchronizeEwsCalendar<EwsEventRaw>(cal, token, raw => ewsEventToCalendarEvent(raw, cal),
+              queryClient.getQueryData<CalendarEvent[]>(CALENDAR_KEYS.events(cal.id)) ?? [],
+              progress => {
+                if (signal.aborted) return;
+                queryClient.setQueryData(CALENDAR_KEYS.events(cal.id), progress);
+                // Progressive data is useful after restart too, but has no
+                // cursor until all history pages have completed successfully.
+                void cacheSet(cacheKey, progress);
+              });
+          } catch (error) {
+            // Availability-only shared calendars cannot expose folder cursors
+            // or item versions. Preserve their existing, permission-checked view.
+            if (!cal.shared || !/ErrorAccessDenied|ErrorItemNotFound|ErrorFolderNotFound/.test(String(error))) throw error;
+            events = await fetchEWSEvents(cal, token);
+          }
+          if (signal.aborted) throw signal.reason;
+          await cacheSet(cacheKey, events);
+          return events;
         }
         return [];
       },
@@ -168,7 +205,9 @@ export function useCalendarEvents(calendars: CalendarConfig[], onLoaded?: (id: s
   // Results are tracked by their update timestamp, not their unstable wrapper.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataTimestamps, onLoaded]);
-  const errorTimestamps = results.map(r => r.errorUpdatedAt).join(',');
+  // errorUpdatedAt remains unchanged when a later request succeeds. Include
+  // status so an old failure cannot keep hiding a recovered Android snapshot.
+  const errorTimestamps = results.map(r => `${r.errorUpdatedAt}:${r.status}`).join(',');
   // `isLoading` only covers the first load. Manual refreshes use `isFetching`,
   // which lets the header display progress every time the user clicks Refresh.
   const isLoading = results.some(r => r.isFetching);

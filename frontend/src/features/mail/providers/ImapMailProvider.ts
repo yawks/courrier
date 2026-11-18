@@ -49,7 +49,7 @@ export class ImapMailProvider implements MailProvider {
     };
   }
 
-  async listThreads(folder: string, maxCount?: number, offset = 0): Promise<MailThread[]> {
+  async listThreads(folder: string, maxCount?: number, offset = 0, hasAttachment = false): Promise<MailThread[]> {
     if (folder === 'scheduled') return [];
     const targetFolder = this.resolveFolder(folder);
     const threads = await invoke<MailThread[]>('imap_list_threads', {
@@ -57,6 +57,7 @@ export class ImapMailProvider implements MailProvider {
       folder: targetFolder,
       maxCount,
       offset,
+      hasAttachment,
     });
     // For IMAP, we encode the folder in the conversation_id because UIDs are folder-specific
     return threads.map(t => ({
@@ -66,7 +67,7 @@ export class ImapMailProvider implements MailProvider {
   }
 
   async searchThreads(query: MailSearchQuery, maxCount?: number): Promise<MailThread[]> {
-    return this.listThreads(query.folder || 'INBOX', maxCount);
+    return this.listThreads(query.folder || 'INBOX', maxCount, 0, query.hasAttachment);
   }
 
   async getThreadSnippet(conversationId: string): Promise<string> {

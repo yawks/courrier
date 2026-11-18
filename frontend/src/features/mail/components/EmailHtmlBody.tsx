@@ -1,6 +1,6 @@
 import { useMailContentRules } from '../../../shared/store/MailContentRulesStore';
 import { filterMailHtml, filterMailText } from '../utils/mailContentFilter';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useId, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../../shared/store/ThemeStore';
 import { useFontSize } from '../../../shared/store/FontSizeStore';
@@ -9,6 +9,17 @@ import { platform } from '../../../shared/platform';
 import { disableSenderDarkModeCss, protectEmailEmojis } from '../utils/emailDarkMode';
 import { installEmailPinchZoom } from '../utils/emailPinchZoom';
 import { findQuoteMarker, processEmailQuotes } from '../utils/emailQuoteParser';
+
+function measureMailBody<T>(instance: string, stage: string, operation: () => T): T {
+  if (!import.meta.env.DEV) return operation();
+  const start = performance.now();
+  try {
+    return operation();
+  } finally {
+    const durationMs = Math.round(performance.now() - start);
+    if (durationMs >= 50) console.info('[MailPerf]', { instance, stage, durationMs });
+  }
+}
 
 function parseHexColor(raw: string): [number, number, number] | null {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw.trim());
@@ -64,8 +75,14 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
 }) {
   const { t } = useTranslation();
   const { rules } = useMailContentRules();
-  const filtered = useMemo(() => filterMailHtml(html, rules), [html, rules]);
-  const filteredText = useMemo(() => filterMailText(bodyText ?? '', rules), [bodyText, rules]);
+  const instance = useId();
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.debug('[MailPerf]', { instance, stage: 'mount' });
+    return () => console.debug('[MailPerf]', { instance, stage: 'unmount' });
+  }, [instance]);
+  const filtered = useMemo(() => measureMailBody(instance, 'filter-html', () => filterMailHtml(html, rules)), [html, rules, instance]);
+  const filteredText = useMemo(() => measureMailBody(instance, 'filter-text', () => filterMailText(bodyText ?? '', rules)), [bodyText, rules, instance]);
   const hasHiddenContent = filtered.changed || filteredText !== (bodyText ?? '').trim();
   useEffect(() => { onHiddenContentChange?.(hasHiddenContent); }, [hasHiddenContent, onHiddenContentChange]);
   const displayText = showHiddenContent ? bodyText : filteredText;
@@ -127,11 +144,18 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
   });
 
   // Detect quote boundary from plain text, then pass the marker to the iframe script.
-  const quoteMarker = displayText ? findQuoteMarker(displayText) : null;
+  const quoteMarker = useMemo(() => displayText ? findQuoteMarker(displayText) : null, [displayText]);
 
-  const escapeText = (text: string) => { const el = document.createElement('div'); el.textContent = text; return el.innerHTML; };
-  const safeHtml = sanitizeEmailHtml(disableSenderDarkModeCss(html ? (showHiddenContent ? html : filtered.html) : `<pre>${escapeText(displayText ?? '')}</pre>`), isDark)
-    .replaceAll(/\bsrc=["']cid:[^"']*["']/gi, 'src=""');
+  const safeHtml = useMemo(() => measureMailBody(instance, 'sanitize-html', () => {
+    let source = showHiddenContent ? html : filtered.html;
+    if (!html) {
+      const el = document.createElement('div');
+      el.textContent = displayText ?? '';
+      source = `<pre>${el.innerHTML}</pre>`;
+    }
+    return sanitizeEmailHtml(disableSenderDarkModeCss(source), isDark)
+      .replaceAll(/\bsrc=["']cid:[^"']*["']/gi, 'src=""');
+  }), [html, showHiddenContent, filtered.html, displayText, isDark, instance]);
 
   // Android WebView can expose the top-level layout viewport to srcdoc media
   // queries instead of the iframe width. Apply the mobile constraints without
@@ -170,7 +194,7 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
     // and may otherwise leave a partially folded, invisible message behind.
     const originalHtml = root.innerHTML;
     try {
-      processEmailQuotes(root, { label: prevMsgLabel, quoteMarker, attributionTemplate, expandFirstQuote });
+      measureMailBody(instance, 'fold-quotes', () => processEmailQuotes(root, { label: prevMsgLabel, quoteMarker, attributionTemplate, expandFirstQuote }));
     } catch (error) {
       root.innerHTML = originalHtml;
       console.error('[EmailHtmlBody] Quote processing failed; displaying original message', error);
@@ -365,7 +389,7 @@ export function EmailHtmlBody({ html, bodyText, onReady, expandFirstQuote = fals
       ref={iframeRef}
       srcDoc={srcdoc}
       sandbox="allow-same-origin allow-scripts"
-      onLoad={handleFrameLoad}
+      onLoad={() => measureMailBody(instance, 'frame-load', handleFrameLoad)}
       className="mail-email-iframe"
       title="email-body"
     />

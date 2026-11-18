@@ -151,16 +151,32 @@ export function NativeDeepLinks() {
     };
     openShare();
     globalThis.addEventListener('courrier:share-ready', openShare);
+    let refreshScheduled = false;
     const refreshMail = () => {
+      // Screen visibility and Capacitor resume can arrive in the same turn.
+      if (refreshScheduled) return;
+      refreshScheduled = true;
       // Capacitor's WebView does not reliably emit a window focus transition
       // when the app resumes. In particular, after airplane mode React Query
       // can otherwise keep rendering a persisted/offline empty Inbox even
       // though the native worker has already synchronized new mail.
-      void queryClient.invalidateQueries({
-        queryKey: ['mail'],
-        refetchType: 'active',
+      // Invalidation alone can reuse an unfinished initial request (no cached
+      // data), or a retry paused before Android suspended the WebView. Retire
+      // those reads first; late native responses must not overwrite fresh mail.
+      // Mutations are deliberately not cancelled or replayed.
+      void queryClient.cancelQueries({ queryKey: ['mail'], type: 'active' }).then(() => {
+        refreshScheduled = false;
+        return queryClient.invalidateQueries({
+          queryKey: ['mail'],
+          refetchType: 'active',
+        });
       });
     };
+    const refreshVisibleMail = () => {
+      // Waking/unlocking the screen does not always produce appStateChange.
+      if (document.visibilityState === 'visible') refreshMail();
+    };
+    document.addEventListener('visibilitychange', refreshVisibleMail);
     const consumeNativeTarget = (releaseIfEmpty = false) => platform.consumeNotificationUrl().then(url => {
       if (url) void openDeepLink(url);
       else {
@@ -190,7 +206,11 @@ export function NativeDeepLinks() {
     const stateListener = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
       if (isActive) {
         openShare();
-        void consumeNativeTarget().then(refreshMail);
+        refreshMail();
+        // Notification handling must never gate the Inbox refresh.
+        void consumeNativeTarget().catch(() => {
+          if (!notificationPaintPendingRef.current) void platform.revealNotificationView?.();
+        });
       }
       else {
         globalThis.dispatchEvent(new Event('courrier:share-save'));
@@ -238,6 +258,7 @@ export function NativeDeepLinks() {
       if (openingTimeoutRef.current) clearTimeout(openingTimeoutRef.current);
       if (enrichmentTimeoutRef.current) clearTimeout(enrichmentTimeoutRef.current);
       globalThis.removeEventListener('online', refreshMail);
+      document.removeEventListener('visibilitychange', refreshVisibleMail);
       globalThis.removeEventListener('courrier:share-ready', openShare);
       void listener.then(handle => handle.remove());
       void backListener.then(handle => handle.remove());

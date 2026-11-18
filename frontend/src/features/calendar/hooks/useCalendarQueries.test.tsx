@@ -9,6 +9,7 @@ import i18n from '../../../i18n';
 import type { CalendarConfig } from '../../../shared/types';
 vi.mock('../../../shared/store/ExchangeAuthStore', () => ({ useExchangeAuth: () => ({ getValidToken: async () => 'fixture-token' }) }));
 vi.mock('../../../shared/api/exchangeCalendarApi', () => ({ exchangeCalendarApi: { list: vi.fn(), get: vi.fn() } }));
+vi.mock('../utils/ewsCalendarSync', () => ({ synchronizeEwsCalendar: async () => { throw new Error('EWS calendar SyncFolderItems: ErrorAccessDenied'); } }));
 const calendar: CalendarConfig = { id: 'shared', name: 'Other', color: '#123456', visible: true, url: '', type: 'exchange', exchangeAccountId: 'account', exchangeFolderId: 'selected', shared: { ownerEmail: 'other@example.test' } };
 const raw = { item_id: 'availability:start:end:Busy', change_key: '', subject: '', start: '2026-10-19T10:00:00Z', end: '2026-10-19T11:00:00Z', is_all_day: false, my_response_type: 'Accept', attendees: [], is_meeting: false, is_cancelled: false, availability_only: true };
 afterEach(() => vi.clearAllMocks());

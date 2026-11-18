@@ -3,6 +3,7 @@ import { hasNativeTransport, invokeNative } from './nativeTransport';
 
 type Credentials = { url: string; username: string; password: string };
 export type CalDavResource = { text: string; etag: string | null };
+export type IcsResource = { text?: string; etag?: string | null; lastModified?: string | null; notModified?: boolean };
 
 async function request<T>(path: string, body: unknown, method = 'POST'): Promise<T> {
   const response = await fetch(apiUrl(`/api/calendar${path}`), {
@@ -23,6 +24,11 @@ export const calendarApi = {
   async fetchIcs(url: string): Promise<string> {
     if (hasNativeTransport()) return (await invokeNative<{ text: string }>('calendar_ics_fetch', { url })).text;
     return (await request<{ text: string }>('/ics/fetch', { url })).text;
+  },
+  async fetchIcsResource(url: string, etag?: string, lastModified?: string): Promise<IcsResource> {
+    const args = { url, etag, lastModified };
+    if (hasNativeTransport()) return invokeNative<IcsResource>('calendar_ics_fetch', args);
+    return request<IcsResource>('/ics/fetch', args);
   },
   async fetchCalDav(credentials: Credentials): Promise<string> {
     if (hasNativeTransport()) return (await invokeNative<{ text: string }>('calendar_caldav_fetch', credentials)).text;

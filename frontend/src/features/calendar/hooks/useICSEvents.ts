@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { CalendarConfig, CalendarEvent } from '../../../shared/types';
-import { parseICS } from '../utils/parseICS';
+import { synchronizeIcsCalendar } from '../utils/icsCalendarSync';
 import { cacheGetStale, cacheSet, cacheIsFresh } from '../utils/eventCache';
-import { calendarApi } from '../../../shared/api/calendarApi';
 
 const CACHE_TTL = 30 * 60 * 1000; // 30 min
 const CACHE_VERSION = 'v3';
@@ -11,13 +10,10 @@ function cacheKey(calId: string, ownerEmail?: string) {
   return `ics-events:${CACHE_VERSION}:${calId}:${ownerEmail ?? ''}`;
 }
 
-async function fetchAndParse(cal: CalendarConfig): Promise<CalendarEvent[]> {
-  const text = await calendarApi.fetchIcs(cal.url);
-  return parseICS(text, cal);
-}
-
 export function useICSEvents(calendars: CalendarConfig[], onLoaded?: (id: string, events: CalendarEvent[]) => void) {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const calendarsRef = useRef(calendars);
@@ -39,7 +35,9 @@ export function useICSEvents(calendars: CalendarConfig[], onLoaded?: (id: string
       if (cached) onLoadedRef.current?.(cal.id, cached);
       return cached;
     }))).flat().filter(Boolean) as CalendarEvent[];
-    if (stale.length > 0) setEvents(stale);
+    if (stale.length > 0) setEvents(current => [
+      ...stale, ...current.filter(event => !stale.some(cached => cached.calendarId === event.calendarId)),
+    ]);
 
     // Phase 2: determine which calendars need a network fetch
     const toRefresh = force
@@ -53,7 +51,7 @@ export function useICSEvents(calendars: CalendarConfig[], onLoaded?: (id: string
 
     const settled = await Promise.allSettled(
       toRefresh.map(async (cal) => {
-        const parsed = await fetchAndParse(cal);
+        const parsed = await synchronizeIcsCalendar(cal);
         await cacheSet(cacheKey(cal.id, cal.ownerEmail), parsed);
         onLoadedRef.current?.(cal.id, parsed);
         return parsed;
@@ -68,6 +66,8 @@ export function useICSEvents(calendars: CalendarConfig[], onLoaded?: (id: string
         results.push(...result.value);
       } else {
         newErrors[toRefresh[i].id] = result.reason?.message ?? 'Erreur inconnue';
+        const previous = eventsRef.current.filter(event => event.calendarId === toRefresh[i].id);
+        results.push(...(previous.length ? previous : stale.filter(event => event.calendarId === toRefresh[i].id)));
       }
     });
 

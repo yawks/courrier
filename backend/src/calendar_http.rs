@@ -16,9 +16,6 @@ pub struct ApiError { error: String }
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
 #[derive(Deserialize)]
-pub struct UrlRequest { url: String }
-
-#[derive(Deserialize)]
 pub struct AuthRequest { url: String, username: String, password: String }
 
 #[derive(Deserialize)]
@@ -28,8 +25,6 @@ pub struct PutRequest { url: String, username: String, password: String, ics_con
 #[serde(rename_all = "camelCase")]
 pub struct ConfigPutRequest { url: String, username: String, password: String, content: String, if_match: Option<String> }
 
-#[derive(Serialize)]
-pub struct TextResponse { text: String }
 #[derive(Serialize)]
 pub struct ResourceResponse { text: String, etag: Option<String> }
 
@@ -71,11 +66,11 @@ fn upstream(message: impl ToString) -> (StatusCode, Json<ApiError>) {
     (StatusCode::BAD_GATEWAY, Json(ApiError { error: message.to_string() }))
 }
 
-pub async fn fetch_ics(State(state): State<CalendarHttpState>, Json(body): Json<UrlRequest>) -> ApiResult<TextResponse> {
+pub async fn fetch_ics(State(state): State<CalendarHttpState>, Json(body): Json<app_lib::caldav::IcsFetch>) -> ApiResult<serde_json::Value> {
     let url = state.checked_url(&body.url)?;
-    let response = state.client.get(url).send().await.map_err(upstream)?;
-    if !response.status().is_success() { return Err(upstream(format!("provider_http_{}", response.status().as_u16()))); }
-    Ok(Json(TextResponse { text: response.text().await.map_err(upstream)? }))
+    let response = app_lib::caldav::conditional_feed(state.client.get(url), body.etag.as_deref(), body.last_modified.as_deref())
+        .send().await.map_err(upstream)?;
+    app_lib::caldav::feed_response(response).await.map(Json).map_err(upstream)
 }
 
 pub async fn fetch_authenticated(State(state): State<CalendarHttpState>, Json(body): Json<AuthRequest>) -> ApiResult<ResourceResponse> {

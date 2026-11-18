@@ -1,6 +1,43 @@
 //! Read-only DAV discovery, shared by the web adapter and native transports.
 use serde::Deserialize;
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcsFetch {
+    pub url: String,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+pub fn conditional_feed(request: reqwest::RequestBuilder, etag: Option<&str>, last_modified: Option<&str>) -> reqwest::RequestBuilder {
+    if let Some(etag) = etag { return request.header(reqwest::header::IF_NONE_MATCH, etag); }
+    match last_modified { Some(value) => request.header(reqwest::header::IF_MODIFIED_SINCE, value), None => request }
+}
+
+pub async fn feed_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
+    let status = response.status();
+    let etag = response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let last_modified = response.headers().get(reqwest::header::LAST_MODIFIED).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    if status == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(serde_json::json!({ "notModified": true, "etag": etag, "lastModified": last_modified }));
+    }
+    if !status.is_success() { return Err(format!("provider_http_{}", status.as_u16())); }
+    let text = response.text().await.map_err(|_| "provider_invalid_response")?;
+    Ok(serde_json::json!({ "notModified": false, "text": text, "etag": etag, "lastModified": last_modified }))
+}
+
+pub async fn fetch_ics(request: IcsFetch) -> Result<serde_json::Value, String> {
+    let url = reqwest::Url::parse(&request.url).map_err(|_| "invalid_provider_url")?;
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
+        return Err("invalid_provider_url".into());
+    }
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "provider_request_failed")?;
+    let response = conditional_feed(client.get(url), request.etag.as_deref(), request.last_modified.as_deref())
+        .send().await.map_err(|_| "provider_request_failed")?;
+    feed_response(response).await
+}
+
 pub fn conditional_put(request: reqwest::RequestBuilder, if_match: Option<&str>, if_none_match: bool) -> reqwest::RequestBuilder {
     if if_none_match { return request.header(reqwest::header::IF_NONE_MATCH, "*"); }
     match if_match { Some(etag) => request.header(reqwest::header::IF_MATCH, etag), None => request }
@@ -45,6 +82,17 @@ pub async fn query(request: Query) -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feed_revalidation_uses_etag_or_last_modified_but_never_write_preconditions() {
+        let client = reqwest::Client::new();
+        let request = conditional_feed(client.get("https://example.test/feed"), Some("\"v1\""), Some("yesterday")).build().unwrap();
+        assert_eq!(request.headers()[reqwest::header::IF_NONE_MATCH], "\"v1\"");
+        assert!(!request.headers().contains_key(reqwest::header::IF_MATCH));
+        assert!(!request.headers().contains_key(reqwest::header::IF_MODIFIED_SINCE));
+        let request = conditional_feed(client.get("https://example.test/feed"), None, Some("yesterday")).build().unwrap();
+        assert_eq!(request.headers()[reqwest::header::IF_MODIFIED_SINCE], "yesterday");
+    }
 
     #[test]
     fn conditional_calendar_writes_preserve_the_exact_etag_and_leave_legacy_writes_unconditional() {

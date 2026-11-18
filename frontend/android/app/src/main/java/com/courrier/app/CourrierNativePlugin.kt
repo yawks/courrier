@@ -132,11 +132,15 @@ class CourrierNativePlugin:Plugin(){
  private var pendingNotificationUrl:String?=null
  private val commandExecutor:ExecutorService=Executors.newFixedThreadPool(4)
  private val interactiveCommandExecutor:ExecutorService=Executors.newFixedThreadPool(2)
+ private val mailboxReadExecutor:ExecutorService=Executors.newFixedThreadPool(4)
+ private val configSyncExecutor:ExecutorService=Executors.newSingleThreadExecutor()
 
  override fun handleOnDestroy(){
   calendarExecutor.shutdown()
   commandExecutor.shutdownNow()
   interactiveCommandExecutor.shutdownNow()
+  mailboxReadExecutor.shutdownNow()
+  configSyncExecutor.shutdownNow()
   super.handleOnDestroy()
  }
 
@@ -159,10 +163,16 @@ class CourrierNativePlugin:Plugin(){
     return
    }
    val argumentsJson=args.toString()
-   val executor=if(isInteractiveMailCommand(command))interactiveCommandExecutor else commandExecutor
-   executor.execute{
-    val startedAt=android.os.SystemClock.elapsedRealtime()
-    Log.i("CourrierCommand","start command=$command interactive=${isInteractiveMailCommand(command)}")
+    val executor=when{
+     isConfigSyncCommand(command)->configSyncExecutor
+     isInteractiveMailCommand(command)->interactiveCommandExecutor
+     isMailboxReadCommand(command)->mailboxReadExecutor
+     else->commandExecutor
+    }
+    val queuedAt=android.os.SystemClock.elapsedRealtime()
+    executor.execute{
+     val startedAt=android.os.SystemClock.elapsedRealtime()
+     Log.i("CourrierCommand","start command=$command interactive=${isInteractiveMailCommand(command)} mailbox=${isMailboxReadCommand(command)} queueMs=${startedAt-queuedAt}")
     try{
      val value=NativeCore.command(command,argumentsJson)
      Log.i("CourrierCommand","complete command=$command durationMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
