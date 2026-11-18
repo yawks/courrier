@@ -121,7 +121,7 @@ function filterContacts(contacts: RecipientEntry[], query: string): RecipientEnt
   const q = query.toLowerCase();
   const base = q
     ? contacts.filter(
-        c => c.email.toLowerCase().startsWith(q) || (c.name?.toLowerCase().startsWith(q) ?? false)
+        c => c.email.toLowerCase().includes(q) || (c.name?.toLowerCase().startsWith(q) ?? false)
       )
     : contacts;
   return base.slice(0, 8);
