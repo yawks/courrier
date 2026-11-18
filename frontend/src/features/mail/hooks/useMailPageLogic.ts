@@ -29,6 +29,8 @@ import { removeOfflineInboxMessages } from '../utils/offlineMailCache';
 import { clearConnectionIssue, isConnectionFailure, reportConnectionIssue } from '../../../shared/store/ConnectionIssueStore';
 
 const threadIdentity = (thread: MailThread) => `${thread.accountId ?? ''}:${thread.conversation_id}`;
+const removalIdentity = (accountId: string, folder: Folder, conversationId: string) =>
+  JSON.stringify([accountId, folder, conversationId]);
 
 function deduplicateThreads(threads: MailThread[]): MailThread[] {
   const seen = new Set<string>();
@@ -185,8 +187,9 @@ export function useMailPageLogic() {
   // ce qui empêche tout refetch (focus fenêtre, interval 60s) de les faire réapparaître.
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<string>>(new Set());
   const threads = useMemo(
-    () => deduplicateThreads(stableThreads).filter(t => !pendingRemovalIds.has(t.conversation_id)),
-    [stableThreads, pendingRemovalIds],
+    () => deduplicateThreads(stableThreads).filter(t =>
+      !pendingRemovalIds.has(removalIdentity(t.accountId ?? selectedAccountId, selectedFolder, t.conversation_id))),
+    [stableThreads, pendingRemovalIds, selectedAccountId, selectedFolder],
   );
 
   const allThreadTotalCount = useMemo(() => {
@@ -712,7 +715,6 @@ export function useMailPageLogic() {
     setSelectedThread(null);
     setReplyingTo(null);
     setSelectedThreadIds(new Set());
-    setPendingRemovalIds(new Set());
     setStableThreads([]);
     setThreadOffset(0);
     setSelectedFolderAccountId(undefined);
@@ -783,16 +785,17 @@ export function useMailPageLogic() {
    */
   const optimisticallyRemoveThread = useCallback((conversationId: string, accountId: string) => {
     const rollbackCount = optimisticallyReduceCount(accountId, 1);
-    setPendingRemovalIds(prev => new Set([...prev, conversationId]));
+    const key = removalIdentity(accountId, selectedFolder, conversationId);
+    setPendingRemovalIds(prev => new Set([...prev, key]));
     return () => {
       rollbackCount();
       setPendingRemovalIds(prev => {
         const next = new Set(prev);
-        next.delete(conversationId);
+        next.delete(key);
         return next;
       });
     };
-  }, [optimisticallyReduceCount]);
+  }, [optimisticallyReduceCount, selectedFolder]);
 
   const cycleTheme = useCallback(() => {
     const currentIndex = THEME_CYCLE.indexOf(preference);
@@ -908,7 +911,7 @@ export function useMailPageLogic() {
         const isDraft = selectedFolder === 'drafts';
         const clearPendingRemoval = () => setPendingRemovalIds(prev => {
           const next = new Set(prev);
-          next.delete(thread.conversation_id);
+          next.delete(removalIdentity(accountId, selectedFolder, thread.conversation_id));
           return next;
         });
         const callbacks = {
@@ -1015,7 +1018,7 @@ export function useMailPageLogic() {
     } finally {
       setPendingRemovalIds(previous => {
         const next = new Set(previous);
-        next.delete(selectedThread.conversation_id);
+        next.delete(removalIdentity(accountId, selectedFolder, selectedThread.conversation_id));
         return next;
       });
     }
@@ -1041,7 +1044,8 @@ export function useMailPageLogic() {
   const beginBulkRemoval = useCallback((accountId: string, conversationIds: string[], alreadyHidden = false) => {
     const ids = new Set(conversationIds);
     const rollbackCount = optimisticallyReduceCount(accountId, alreadyHidden ? 0 : ids.size);
-    setPendingRemovalIds(previous => new Set([...previous, ...ids]));
+    const keys = conversationIds.map(id => removalIdentity(accountId, selectedFolder, id));
+    setPendingRemovalIds(previous => new Set([...previous, ...keys]));
     if (selectedThread && ids.has(selectedThread.conversation_id)
       && (selectedThread.accountId ?? selectedAccountId) === accountId) {
       setSelectedThread(actionThreads.find(thread => !ids.has(thread.conversation_id)) ?? null);
@@ -1056,11 +1060,11 @@ export function useMailPageLogic() {
       },
       onSettled: () => setPendingRemovalIds(previous => {
         const next = new Set(previous);
-        for (const id of ids) next.delete(id);
+        for (const key of keys) next.delete(key);
         return next;
       }),
     };
-  }, [selectedThread, selectedAccountId, actionThreads, optimisticallyReduceCount]);
+  }, [selectedThread, selectedAccountId, selectedFolder, actionThreads, optimisticallyReduceCount]);
 
   const handleSnooze = useCallback(async (snoozeUntil: string) => {
     if (!selectedThread) return;
@@ -1134,7 +1138,7 @@ export function useMailPageLogic() {
             setError(getErrorMessage(error));
           },
           onSettled: () => {
-            setPendingRemovalIds(prev => { const next = new Set(prev); next.delete(conversationId); return next; });
+            setPendingRemovalIds(prev => { const next = new Set(prev); next.delete(removalIdentity(accountId, selectedFolder, conversationId)); return next; });
           },
         });
         setDeleteToast(null);
@@ -1143,7 +1147,7 @@ export function useMailPageLogic() {
       setDeleteToast({ label: t('mail.moved', 'Conversation déplacée') });
       pendingActionRef.current = { id: conversationId, timerId: setTimeout(execute, 5000), execute, rollback };
     }
-  }, [selectedThread, mutations, resolveProvider, selectedAccountId, selectNextThread, t, flushPendingAction, optimisticallyRemoveThread]);
+  }, [selectedThread, mutations, resolveProvider, selectedAccountId, selectedFolder, selectNextThread, t, flushPendingAction, optimisticallyRemoveThread]);
 
   const handleBulkDelete = useCallback(async () => {
     const permanent = selectedFolder === 'deleteditems';

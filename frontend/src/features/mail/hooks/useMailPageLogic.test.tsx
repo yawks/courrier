@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it, vi } from 'vitest';
 import { useMailPageLogic } from './useMailPageLogic';
 import type { ComposerRestoreData } from '../types';
+import { ALL_ACCOUNTS_ID } from '../utils';
 const f = vi.hoisted(() => ({ accounts: [{ id: 'account', email: 'sender@example.com', displayName: 'Sender' }], empty: [], conversation: vi.fn(), send: vi.fn(), trash: vi.fn(), remove: vi.fn(), move: vi.fn(), snooze: vi.fn(), folderQuery: { data: [] }, query: { data: [], errors: [], refetch: vi.fn() }, folders: { allAccountFolders: new Map(), allModeDynamicFolders: [], mergedCounts: {}, errors: [] }, t: (key: string) => key }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: f.t }) }));
 vi.mock('../../../shared/store/ExchangeAuthStore', () => ({ useExchangeAuth: () => ({ accounts: f.accounts, getValidToken: f.t }) }));
@@ -21,6 +22,65 @@ vi.mock('../providers/EwsMailProvider', () => ({ EwsMailProvider: class { provid
 vi.mock('./useMailMutations', () => ({ useMailMutations: () => ({ sendMail: f.send, moveToTrash: f.remove, moveThread: f.move, snoozeThread: f.snooze }) }));
 vi.mock('./useMailQueries', async importOriginal => ({ ...await importOriginal<typeof import('./useMailQueries')>(), useMailFolders: () => f.folderQuery, useAllAccountFolders: () => f.folders, useMailThreads: () => f.query, useAllAccountThreads: () => f.query, useMailConversation: (...args: unknown[]) => { f.conversation(...args); return f.query; }, useMailSearch: () => f.query, useAllAccountSearch: () => f.query, useAllAccountIdentities: () => f.empty }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+for (const outcome of ['undo', 'failure', 'success'] as const) {
+  it(`keeps a pending deletion hidden across account tabs until ${outcome}`, async () => {
+    vi.useFakeTimers();
+    f.remove.mockReset();
+    const client = new QueryClient();
+    const root = createRoot(document.createElement('div'));
+    let logic!: ReturnType<typeof useMailPageLogic>;
+    function Harness() { logic = useMailPageLogic(); return null; }
+    const previousData = f.query.data;
+    const deleted = { conversation_id: 'same-id', accountId: 'account', unread_count: 0, to_recipients: [], cc_recipients: [] };
+    const otherAccount = { ...deleted, accountId: 'other-account' };
+    try {
+      f.query.data = [deleted, otherAccount] as never[];
+      await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>));
+      await act(async () => logic.selectAccount('account'));
+      await act(async () => logic.moveToTrash(deleted.conversation_id));
+      expect(logic.threads).toEqual([otherAccount]);
+      await act(async () => logic.selectAccount(ALL_ACCOUNTS_ID));
+      expect(logic.threads).toEqual([otherAccount]);
+      expect(f.remove).not.toHaveBeenCalled();
+
+      // A pending Inbox removal must not hide another folder's copy.
+      await act(async () => logic.selectFolder('sentitems'));
+      expect(logic.threads).toEqual([deleted, otherAccount]);
+      await act(async () => logic.selectFolder('inbox'));
+      expect(logic.threads).toEqual([otherAccount]);
+      await act(async () => logic.selectAccount('account'));
+      expect(logic.threads).toEqual([otherAccount]);
+
+      if (outcome === 'undo') {
+        await act(async () => logic.cancelDeletion());
+        expect(logic.threads).toEqual([deleted, otherAccount]);
+        await act(async () => vi.advanceTimersByTimeAsync(5000));
+        expect(f.remove).not.toHaveBeenCalled();
+      } else {
+        await act(async () => vi.advanceTimersByTimeAsync(5000));
+        expect(f.remove).toHaveBeenCalledOnce();
+        await act(async () => logic.selectAccount(ALL_ACCOUNTS_ID));
+        expect(logic.threads).toEqual([otherAccount]);
+        const callbacks = f.remove.mock.calls[0][1];
+        await act(async () => {
+          if (outcome === 'failure') callbacks.onError(new Error('rejected'));
+          else callbacks.onSuccess();
+          callbacks.onSettled();
+        });
+        expect(logic.threads).toEqual(outcome === 'failure' ? [deleted, otherAccount] : [otherAccount]);
+        if (outcome === 'failure') expect(logic.error).toBe('rejected');
+      }
+    } finally {
+      f.query.data = previousData;
+      await act(async () => root.unmount());
+      client.clear();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+}
+
 for (const folder of ['inbox', 'drafts', 'deleteditems'] as const) {
   it(`opens search conversations across folders while browsing ${folder}`, async () => {
     const client = new QueryClient();
